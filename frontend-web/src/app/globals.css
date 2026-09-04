@@ -1,0 +1,58 @@
+@import "tailwindcss";
+
+/*
+ * Identidade visual do GlicAI — mesma paleta usada no PDF de exportação
+ * (app/services/exportacao.py no backend): Âmbar Glic e Coral Vida como
+ * cores primárias/energia, Petróleo pro texto, Areia de fundo. Verde e
+ * Vermelho ficam RESERVADOS pro significado clínico real (glicemia dentro/
+ * fora da meta) — nunca usados de forma decorativa em botões, links etc.
+ */
+:root {
+  --areia: #fbf6ef;
+  --petroleo: #1b3a4b;
+  --coral: #ff6f5e;
+  --ambar: #f5a623;
+  --verde: #4caf7d;
+  --vermelho: #e85d5d;
+
+  --background: var(--areia);
+  --foreground: var(--petroleo);
+  --card: #ffffff;
+  --border: color-mix(in srgb, var(--petroleo) 12%, transparent);
+  --primary: var(--coral);
+  --primary-foreground: #ffffff;
+  --accent: var(--ambar);
+  --muted: color-mix(in srgb, var(--petroleo) 55%, transparent);
+}
+
+:root[data-theme="dark"] {
+  --background: #122129;
+  --foreground: #f5efe4;
+  --card: #182a33;
+  --border: color-mix(in srgb, #ffffff 12%, transparent);
+  --primary: var(--coral);
+  --primary-foreground: #ffffff;
+  --accent: var(--ambar);
+  --muted: color-mix(in srgb, #ffffff 60%, transparent);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-border: var(--border);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-muted: var(--muted);
+  --color-verde: var(--verde);
+  --color-vermelho: var(--vermelho);
+  --font-heading: var(--font-fraunces);
+  --font-sans: var(--font-inter);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}

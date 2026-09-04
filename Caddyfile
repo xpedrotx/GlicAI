@@ -1,0 +1,17 @@
+# Site de acompanhamento do GlicAI — front-end (Next.js) e back-end
+# (FastAPI) atrás do mesmo domínio, pra evitar CORS e permitir cookie de
+# sessão httpOnly (mesma origem do ponto de vista do navegador).
+#
+# Troque pelo seu domínio real. Ele precisa apontar (registro DNS tipo A,
+# "DNS only" — nuvem cinza no Cloudflare, não laranja) pro IP deste
+# servidor, senão o desafio HTTP-01 do Let's Encrypt falha e o Caddy não
+# emite certificado.
+
+seu-dominio.com.br {
+	handle /api/* {
+		reverse_proxy backend-python:8000
+	}
+	handle {
+		reverse_proxy frontend-web:3000
+	}
+}

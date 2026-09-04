@@ -1,0 +1,43 @@
+services:
+  backend-python:
+    build: ./backend-python
+    restart: unless-stopped
+    env_file: ./backend-python/.env
+    expose:
+      - "8000"
+
+  bridge-node:
+    build: ./bridge-node
+    restart: unless-stopped
+    env_file: ./bridge-node/.env
+    depends_on:
+      - backend-python
+    volumes:
+      - wwebjs_auth:/app/.wwebjs_auth
+
+  frontend-web:
+    build: ./frontend-web
+    restart: unless-stopped
+    depends_on:
+      - backend-python
+    expose:
+      - "3000"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - backend-python
+      - frontend-web
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  wwebjs_auth:
+  caddy_data:
+  caddy_config:

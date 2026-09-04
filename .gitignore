@@ -1,0 +1,27 @@
+# Segredos
+backend-python/.env
+bridge-node/.env
+
+# Config local de ferramentas de dev
+.claude/
+
+# Python
+backend-python/venv/
+backend-python/__pycache__/
+backend-python/**/__pycache__/
+backend-python/.pytest_cache/
+*.pyc
+
+# Node
+node_modules/
+bridge-node/.wwebjs_auth/
+bridge-node/.wwebjs_cache/
+
+# Next.js
+frontend-web/.next/
+frontend-web/AGENTS.md
+frontend-web/CLAUDE.md
+
+# Editor / SO
+.DS_Store
+Thumbs.db
