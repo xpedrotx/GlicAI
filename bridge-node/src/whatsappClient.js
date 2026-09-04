@@ -29,6 +29,9 @@ const client = new Client({
 client.on('qr', (qr) => {
   console.log('Escaneie o QR code abaixo com o WhatsApp do número do bot:');
   qrcode.generate(qr, { small: true });
+  // String bruta também, pra gerar a imagem do QR fora do terminal quando
+  // o ASCII acima não for prático de escanear (ex: lendo direto do log).
+  console.log('[glicai-bridge] QR raw:', qr);
 });
 
 client.on('ready', () => {
