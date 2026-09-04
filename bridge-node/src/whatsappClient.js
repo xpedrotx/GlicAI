@@ -62,7 +62,12 @@ client.on('message', async (message) => {
       },
       {
         headers: { 'x-internal-api-key': INTERNAL_API_KEY },
-        timeout: 20000
+        // O Python só responde esse POST depois de já ter mandado a resposta
+        // de volta pro paciente (webhook.py chama enviar_mensagem antes de
+        // retornar) — e enviar_mensagem agora inclui os 5-10s de "digitando"
+        // simulado. Timeout maior que o teto do lado Python (ver
+        // whatsapp_sender.py) pra estourar lá primeiro, com erro mais claro.
+        timeout: 45000
       }
     );
   } catch (err) {
@@ -90,15 +95,36 @@ async function _enviarComRetry(fn) {
   }
 }
 
+const DIGITANDO_MIN_MS = 5000;
+const DIGITANDO_MAX_MS = 10000;
+
+// Mostra "digitando..." no chat por alguns segundos antes de mandar a
+// mensagem — só pra humanizar (uma resposta instantânea de bot é o que mais
+// entrega que é automação). Duração aleatória entre 5-10s, não um valor
+// fixo, pelo mesmo motivo. Falha em mostrar o indicador nunca deve impedir
+// o envio de verdade — só loga e segue.
+async function _simularDigitando(telefone) {
+  try {
+    const chat = await client.getChatById(telefone);
+    await chat.sendStateTyping();
+  } catch (err) {
+    console.warn('[glicai-bridge] Falha ao simular "digitando":', err.message);
+  }
+  const esperaMs = DIGITANDO_MIN_MS + Math.random() * (DIGITANDO_MAX_MS - DIGITANDO_MIN_MS);
+  await new Promise((resolve) => setTimeout(resolve, esperaMs));
+}
+
 // Usado pelo backend Python pra enviar mensagens (respostas, lembretes, alertas).
 // "telefone" é sempre o JID completo original (@c.us ou @lid) — nunca reconstruído
 // a partir só do número, contas @lid não são endereçáveis via @c.us (e vice-versa).
 async function enviarMensagem(telefone, texto) {
+  await _simularDigitando(telefone);
   await _enviarComRetry(() => client.sendMessage(telefone, texto));
 }
 
 // Usado pelo backend Python pra mandar arquivos (ex: PDF de exportação).
 async function enviarArquivo(telefone, nomeArquivo, mimetype, conteudoBase64) {
+  await _simularDigitando(telefone);
   const media = new MessageMedia(mimetype, conteudoBase64, nomeArquivo);
   await _enviarComRetry(() => client.sendMessage(telefone, media, { sendMediaAsDocument: true }));
 }
