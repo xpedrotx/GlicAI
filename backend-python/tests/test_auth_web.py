@@ -62,7 +62,7 @@ def test_confirmar_codigo_com_dados_validos_cria_conta_e_sessao():
     usuario = _criar_usuario(fake)
     _inserir_codigo(fake, usuario["id"])
 
-    token = _executar(auth_web.confirmar_codigo("123456", CPF_VALIDO, "senha-forte-123"))
+    token = _executar(auth_web.confirmar_codigo("123456", CPF_VALIDO, "senha-forte-123", "203.0.113.1"))
 
     assert token
     linha = fake.table("usuarios").select("*").eq("id", usuario["id"]).execute().data[0]
@@ -88,7 +88,7 @@ def test_confirmar_codigo_funciona_pra_conta_vinculada_via_lid():
     usuario = _criar_usuario(fake, telefone="235299934343350@lid")
     _inserir_codigo(fake, usuario["id"])
 
-    token = _executar(auth_web.confirmar_codigo("123456", CPF_VALIDO, "senha-forte-123"))
+    token = _executar(auth_web.confirmar_codigo("123456", CPF_VALIDO, "senha-forte-123", "203.0.113.1"))
     assert token
 
 
@@ -99,7 +99,7 @@ def test_confirmar_codigo_invalido_rejeita():
     _inserir_codigo(fake, usuario["id"], codigo="123456")
 
     try:
-        _executar(auth_web.confirmar_codigo("000000", CPF_VALIDO, "senha-forte-123"))
+        _executar(auth_web.confirmar_codigo("000000", CPF_VALIDO, "senha-forte-123", "203.0.113.1"))
         assert False, "devia ter levantado ErroAutenticacao"
     except auth_web.ErroAutenticacao as erro:
         assert "inválido" in str(erro).lower() or "expirado" in str(erro).lower()
@@ -112,7 +112,7 @@ def test_confirmar_codigo_expirado_rejeita():
     _inserir_codigo(fake, usuario["id"], minutos_para_expirar=-5)
 
     try:
-        _executar(auth_web.confirmar_codigo("123456", CPF_VALIDO, "senha-forte-123"))
+        _executar(auth_web.confirmar_codigo("123456", CPF_VALIDO, "senha-forte-123", "203.0.113.1"))
         assert False, "devia ter levantado ErroAutenticacao"
     except auth_web.ErroAutenticacao:
         pass
@@ -125,7 +125,7 @@ def test_confirmar_codigo_ja_usado_rejeita():
     _inserir_codigo(fake, usuario["id"], usado_em=datetime.now(timezone.utc).isoformat())
 
     try:
-        _executar(auth_web.confirmar_codigo("123456", CPF_VALIDO, "senha-forte-123"))
+        _executar(auth_web.confirmar_codigo("123456", CPF_VALIDO, "senha-forte-123", "203.0.113.1"))
         assert False, "devia ter levantado ErroAutenticacao"
     except auth_web.ErroAutenticacao:
         pass
@@ -138,7 +138,7 @@ def test_confirmar_codigo_com_cpf_invalido_rejeita():
     _inserir_codigo(fake, usuario["id"])
 
     try:
-        _executar(auth_web.confirmar_codigo("123456", "11111111111", "senha-forte-123"))
+        _executar(auth_web.confirmar_codigo("123456", "11111111111", "senha-forte-123", "203.0.113.1"))
         assert False, "devia ter levantado ErroAutenticacao"
     except auth_web.ErroAutenticacao as erro:
         assert "cpf" in str(erro).lower()
@@ -151,7 +151,7 @@ def test_confirmar_codigo_com_senha_curta_rejeita():
     _inserir_codigo(fake, usuario["id"])
 
     try:
-        _executar(auth_web.confirmar_codigo("123456", CPF_VALIDO, "123"))
+        _executar(auth_web.confirmar_codigo("123456", CPF_VALIDO, "123", "203.0.113.1"))
         assert False, "devia ter levantado ErroAutenticacao"
     except auth_web.ErroAutenticacao as erro:
         assert "senha" in str(erro).lower()
@@ -167,7 +167,7 @@ def test_confirmar_codigo_com_cpf_ja_usado_por_outra_conta_rejeita():
     _inserir_codigo(fake, usuario["id"])
 
     try:
-        _executar(auth_web.confirmar_codigo("123456", CPF_VALIDO, "senha-forte-123"))
+        _executar(auth_web.confirmar_codigo("123456", CPF_VALIDO, "senha-forte-123", "203.0.113.1"))
         assert False, "devia ter levantado ErroAutenticacao"
     except auth_web.ErroAutenticacao as erro:
         assert "cpf" in str(erro).lower()
@@ -182,9 +182,9 @@ def test_login_com_credenciais_corretas_cria_sessao():
     auth_web.supabase = fake
     usuario = _criar_usuario(fake)
     _inserir_codigo(fake, usuario["id"])
-    _executar(auth_web.confirmar_codigo("123456", CPF_VALIDO, "senha-forte-123"))
+    _executar(auth_web.confirmar_codigo("123456", CPF_VALIDO, "senha-forte-123", "203.0.113.1"))
 
-    token = _executar(auth_web.login(CPF_VALIDO, "senha-forte-123"))
+    token = _executar(auth_web.login(CPF_VALIDO, "senha-forte-123", "203.0.113.1"))
     assert token
 
 
@@ -193,10 +193,10 @@ def test_login_com_senha_errada_rejeita():
     auth_web.supabase = fake
     usuario = _criar_usuario(fake)
     _inserir_codigo(fake, usuario["id"])
-    _executar(auth_web.confirmar_codigo("123456", CPF_VALIDO, "senha-forte-123"))
+    _executar(auth_web.confirmar_codigo("123456", CPF_VALIDO, "senha-forte-123", "203.0.113.1"))
 
     try:
-        _executar(auth_web.login(CPF_VALIDO, "senha-errada"))
+        _executar(auth_web.login(CPF_VALIDO, "senha-errada", "203.0.113.1"))
         assert False, "devia ter levantado ErroAutenticacao"
     except auth_web.ErroAutenticacao as erro:
         assert "inválidos" in str(erro).lower()
@@ -207,7 +207,7 @@ def test_login_com_cpf_desconhecido_rejeita():
     auth_web.supabase = fake
 
     try:
-        _executar(auth_web.login(CPF_VALIDO_2, "qualquer-senha"))
+        _executar(auth_web.login(CPF_VALIDO_2, "qualquer-senha", "203.0.113.1"))
         assert False, "devia ter levantado ErroAutenticacao"
     except auth_web.ErroAutenticacao:
         pass
@@ -262,3 +262,67 @@ def test_logout_revoga_a_sessao():
     assert _executar(auth_web.validar_sessao(token)) is not None
     _executar(auth_web.logout(token))
     assert _executar(auth_web.validar_sessao(token)) is None
+
+
+# --------------------------------------------------------------------------
+# rate limiting: bloqueia por IP depois de tentativas falhas repetidas —
+# proteção contra força bruta no código de 6 dígitos / senha.
+# --------------------------------------------------------------------------
+
+def test_login_bloqueia_apos_muitas_tentativas_falhas_do_mesmo_ip():
+    fake = FakeSupabase()
+    auth_web.supabase = fake
+    usuario = _criar_usuario(fake)
+    _inserir_codigo(fake, usuario["id"])
+    _executar(auth_web.confirmar_codigo("123456", CPF_VALIDO, "senha-forte-123", "198.51.100.9"))
+
+    ip_atacante = "198.51.100.50"
+    for _ in range(auth_web.MAX_TENTATIVAS):
+        try:
+            _executar(auth_web.login(CPF_VALIDO, "senha-errada", ip_atacante))
+        except auth_web.ErroAutenticacao:
+            pass
+
+    try:
+        _executar(auth_web.login(CPF_VALIDO, "senha-forte-123", ip_atacante))  # senha certa dessa vez
+        assert False, "devia estar bloqueado, mesmo com a senha certa"
+    except auth_web.ErroAutenticacao as erro:
+        assert "tentativas" in str(erro).lower()
+
+
+def test_login_de_ip_diferente_nao_e_afetado_pelo_bloqueio_de_outro():
+    fake = FakeSupabase()
+    auth_web.supabase = fake
+    usuario = _criar_usuario(fake)
+    _inserir_codigo(fake, usuario["id"])
+    _executar(auth_web.confirmar_codigo("123456", CPF_VALIDO, "senha-forte-123", "198.51.100.9"))
+
+    for _ in range(auth_web.MAX_TENTATIVAS):
+        try:
+            _executar(auth_web.login(CPF_VALIDO, "senha-errada", "198.51.100.50"))
+        except auth_web.ErroAutenticacao:
+            pass
+
+    # IP diferente, nunca tentou antes — não deve estar bloqueado.
+    token = _executar(auth_web.login(CPF_VALIDO, "senha-forte-123", "198.51.100.99"))
+    assert token
+
+
+def test_confirmar_codigo_bloqueia_apos_muitas_tentativas_falhas_do_mesmo_ip():
+    fake = FakeSupabase()
+    auth_web.supabase = fake
+    usuario = _criar_usuario(fake)
+    _inserir_codigo(fake, usuario["id"])
+
+    ip_atacante = "198.51.100.60"
+    for _ in range(auth_web.MAX_TENTATIVAS):
+        try:
+            _executar(auth_web.confirmar_codigo("000000", CPF_VALIDO, "senha-forte-123", ip_atacante))
+        except auth_web.ErroAutenticacao:
+            pass
+
+    try:
+        _executar(auth_web.confirmar_codigo("123456", CPF_VALIDO, "senha-forte-123", ip_atacante))  # código certo
+        assert False, "devia estar bloqueado, mesmo com o código certo"
+    except auth_web.ErroAutenticacao as erro:
+        assert "tentativas" in str(erro).lower()

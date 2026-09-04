@@ -54,6 +54,10 @@ client.on('disconnected', (reason) => {
 client.on('message', async (message) => {
   // Ignora mensagens de grupos por enquanto — o GlicAI é 1:1 com o paciente.
   if (message.from.endsWith('@g.us')) return;
+  // Mensagens de sistema do próprio WhatsApp (ex: atualização de status),
+  // nunca um paciente de verdade — o backend também filtra isso por
+  // segurança, mas nem vale gastar uma chamada HTTP.
+  if (message.from === 'status@broadcast') return;
 
   try {
     await axios.post(

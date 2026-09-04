@@ -265,6 +265,110 @@ def test_glicemia_hipoglicemia_mostra_cartao_com_dicas_na_primeira_leitura():
     assert len(lembretes) == 1
 
 
+# --------------------------------------------------------------------------
+# glicemia/bolus: emergência de hipoglicemia grave (< LIMITE_EMERGENCIA_BAIXO)
+# — mesma urgência já existente pro lado alto (> LIMITE_EMERGENCIA), mas
+# pro lado baixo, que é tão ou mais perigoso.
+# --------------------------------------------------------------------------
+
+def test_glicemia_hipoglicemia_grave_dispara_emergencia_e_avisa_cuidadores_na_hora():
+    fake = FakeSupabase()
+    _ligar_supabase_glicemia(fake)
+    usuario = _criar_usuario(fake)
+    fake.table("perfil_glicemico").insert(
+        {
+            "usuario_id": usuario["id"],
+            "meta_glicemia": 120,
+            "limite_baixo": 70,
+            "limite_alto": 180,
+            "fator_sensibilidade": 30,
+        }
+    ).execute()
+
+    with patch.object(comandos.cuidadores, "notificar_cuidadores", new=AsyncMock()) as mock_notificar:
+        resposta = _executar(comandos.processar_comando(usuario, "glicemia 40"))
+
+    assert "emergência" in resposta.lower()
+    assert "hipoglicemia grave" in resposta.lower()
+    assert "192" in resposta  # SAMU
+    mock_notificar.assert_awaited_once()
+    assert "40" in mock_notificar.await_args.args[1]
+
+    registros = fake.table("registros_glicemia").select("*").eq("usuario_id", usuario["id"]).execute().data
+    assert len(registros) == 1
+    assert registros[0]["valor"] == 40
+
+
+def test_glicemia_hipoglicemia_nao_grave_nao_dispara_emergencia():
+    """55 mg/dL é hipoglicemia, mas não grave o suficiente (acima de
+    LIMITE_EMERGENCIA_BAIXO) — continua o fluxo normal de hipo, sem
+    emergência nem aviso imediato aos cuidadores."""
+    fake = FakeSupabase()
+    _ligar_supabase_glicemia(fake)
+    usuario = _criar_usuario(fake)
+    fake.table("perfil_glicemico").insert(
+        {
+            "usuario_id": usuario["id"],
+            "meta_glicemia": 120,
+            "limite_baixo": 70,
+            "limite_alto": 180,
+            "fator_sensibilidade": 30,
+        }
+    ).execute()
+
+    with _mockar_dicas_ia(), patch.object(comandos.cuidadores, "notificar_cuidadores", new=AsyncMock()) as mock_notificar:
+        resposta = _executar(comandos.processar_comando(usuario, "glicemia 55"))
+
+    assert "emergência" not in resposta.lower()
+    mock_notificar.assert_not_awaited()
+
+
+def test_bolus_com_glicemia_hipoglicemia_grave_dispara_emergencia():
+    fake = FakeSupabase()
+    _ligar_supabase_glicemia(fake)
+    usuario = _criar_usuario(fake)
+    fake.table("perfil_glicemico").insert(
+        {
+            "usuario_id": usuario["id"],
+            "meta_glicemia": 120,
+            "limite_baixo": 70,
+            "limite_alto": 180,
+            "fator_sensibilidade": 30,
+        }
+    ).execute()
+
+    with patch.object(comandos.cuidadores, "notificar_cuidadores", new=AsyncMock()) as mock_notificar:
+        resposta = _executar(comandos.processar_comando(usuario, "bolus 40g 30"))
+
+    assert "emergência" in resposta.lower()
+    assert "hipoglicemia grave" in resposta.lower()
+    mock_notificar.assert_awaited_once()
+
+
+def test_glicemia_hiperglicemia_extrema_ainda_dispara_emergencia_do_lado_alto():
+    """Confirma que a emergência pré-existente do lado alto (LIMITE_EMERGENCIA)
+    continua funcionando junto com a nova do lado baixo."""
+    fake = FakeSupabase()
+    _ligar_supabase_glicemia(fake)
+    usuario = _criar_usuario(fake)
+    fake.table("perfil_glicemico").insert(
+        {
+            "usuario_id": usuario["id"],
+            "meta_glicemia": 120,
+            "limite_baixo": 70,
+            "limite_alto": 180,
+            "fator_sensibilidade": 30,
+        }
+    ).execute()
+
+    with patch.object(comandos.cuidadores, "notificar_cuidadores", new=AsyncMock()) as mock_notificar:
+        resposta = _executar(comandos.processar_comando(usuario, "glicemia 650"))
+
+    assert "emergência" in resposta.lower()
+    assert "hipoglicemia" not in resposta.lower()
+    mock_notificar.assert_awaited_once()
+
+
 def test_glicemia_com_correcao_pendente_nao_avisa_cuidadores_na_hora():
     fake = FakeSupabase()
     _ligar_supabase_glicemia(fake)
@@ -639,3 +743,62 @@ def test_criar_senha_gera_codigo_via_comando():
     codigos = fake.table("codigos_login_web").select("*").eq("usuario_id", usuario["id"]).execute().data
     assert len(codigos) == 1
     assert codigos[0]["codigo"] in resposta
+
+
+# --------------------------------------------------------------------------
+# excluir conta: direito de eliminação (LGPD) — exige confirmação explícita
+# separada, igual ao fluxo de sugestão da IA (sim/não).
+# --------------------------------------------------------------------------
+
+def test_excluir_conta_pede_confirmacao_e_nao_apaga_ainda():
+    fake = FakeSupabase()
+    comandos.supabase = fake
+    usuario = _criar_usuario(fake)
+
+    resposta = _executar(comandos.processar_comando(usuario, "excluir conta"))
+
+    assert "apaga permanentemente" in resposta.lower()
+    assert "sim" in resposta.lower() and "não" in resposta.lower()
+    linha = fake.table("usuarios").select("*").eq("id", usuario["id"]).execute().data[0]
+    assert linha["sugestao_pendente"]["comando"] == "confirmar_exclusao_conta"
+
+
+def test_excluir_conta_confirmado_com_sim_apaga_tudo():
+    fake = FakeSupabase()
+    comandos.supabase = fake
+    usuario = _criar_usuario(fake)
+    fake.table("perfil_glicemico").insert({"usuario_id": usuario["id"], "meta_glicemia": 120}).execute()
+    fake.table("registros_glicemia").insert({"usuario_id": usuario["id"], "valor": 110}).execute()
+
+    _executar(comandos.processar_comando(usuario, "excluir conta"))
+    usuario_atualizado = fake.table("usuarios").select("*").eq("id", usuario["id"]).execute().data[0]
+    resposta = _executar(comandos.processar_comando(usuario_atualizado, "sim"))
+
+    assert "apagados" in resposta.lower()
+    assert fake.table("usuarios").select("*").eq("id", usuario["id"]).execute().data == []
+    # FakeSupabase não simula ON DELETE CASCADE — o que importa aqui é que
+    # a linha em "usuarios" (a fonte de verdade) some; no Postgres real, a
+    # cascata cuida do resto (ver comentário em _excluir_conta).
+
+
+def test_excluir_conta_recusado_com_nao_mantem_dados():
+    fake = FakeSupabase()
+    comandos.supabase = fake
+    usuario = _criar_usuario(fake)
+
+    _executar(comandos.processar_comando(usuario, "excluir conta"))
+    usuario_atualizado = fake.table("usuarios").select("*").eq("id", usuario["id"]).execute().data[0]
+    resposta = _executar(comandos.processar_comando(usuario_atualizado, "não"))
+
+    assert "deixa pra lá" in resposta.lower()
+    assert fake.table("usuarios").select("*").eq("id", usuario["id"]).execute().data != []
+
+
+def test_apagar_meus_dados_e_alias_de_excluir_conta():
+    fake = FakeSupabase()
+    comandos.supabase = fake
+    usuario = _criar_usuario(fake)
+
+    resposta = _executar(comandos.processar_comando(usuario, "apagar meus dados"))
+
+    assert "apaga permanentemente" in resposta.lower()

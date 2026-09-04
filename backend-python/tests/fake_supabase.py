@@ -129,6 +129,8 @@ class FakeQuery:
                     row.setdefault("dose_aplicada", None)
                 if self.table_name == "alertas_enviados":
                     row.setdefault("horario_envio", now)
+                if self.table_name == "tentativas_auth":
+                    row.setdefault("criado_em", now)
                 table.append(row)
                 results.append(row)
             return SimpleNamespace(data=results)

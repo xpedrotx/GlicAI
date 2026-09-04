@@ -1,10 +1,11 @@
+import hashlib
 import logging
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from app.config import settings
-from app.services import cadastro, comandos, cuidadores
+from app.services import cadastro, comandos, crise, cuidadores
 from app.services.supabase_client import supabase
 from app.services.whatsapp_sender import enviar_mensagem
 
@@ -16,6 +17,26 @@ _MENSAGEM_ERRO_INTERNO = (
     "Ops, deu um problema técnico aqui do meu lado. 😕\n"
     "Tenta de novo em alguns instantes — se continuar, me avisa."
 )
+
+# JIDs que o WhatsApp usa pra mensagens de sistema/broadcast, nunca um
+# paciente de verdade — sem esse filtro, viravam "usuário" incompleto no
+# banco (ex: status@broadcast) só de existir.
+_JIDS_IGNORADOS = {"status@broadcast"}
+
+
+def _telefone_valido(telefone: str) -> bool:
+    if telefone in _JIDS_IGNORADOS:
+        return False
+    parte_local = telefone.split("@")[0]
+    # "0@c.us" e afins não são número/lid real — sempre tem mais dígitos.
+    return len(parte_local) >= 5 and parte_local != "0"
+
+
+def _telefone_para_log(telefone: str) -> str:
+    """Nunca loga o JID/telefone em texto puro — só um hash curto, o
+    suficiente pra correlacionar linhas do mesmo paciente num incidente sem
+    expor o dado pessoal no log do container."""
+    return hashlib.sha256(telefone.encode()).hexdigest()[:12]
 
 
 class MensagemRecebida(BaseModel):
@@ -64,36 +85,49 @@ async def receber_mensagem(
 
     telefone = normalizar_telefone(payload.telefone)
 
+    if not _telefone_valido(telefone):
+        # Mensagem de sistema/broadcast do próprio WhatsApp, não um paciente
+        # — ignora sem criar usuário nem responder nada.
+        return {"status": "ignorado"}
+
+    log_id = _telefone_para_log(telefone)
+
     # O bot nunca pode ficar mudo por erro interno — silêncio é pior que uma
     # mensagem de erro, o paciente não sabe se foi recebido.
     try:
-        # Checa "vincular <código> <nome>" antes de tratar como paciente
-        # conhecido — senão um "oi" antes do vincular criaria um cadastro de
-        # paciente incompleto sem querer.
-        resposta_vinculo = await cuidadores.tentar_vincular(telefone, payload.mensagem)
-
-        if resposta_vinculo is not None:
-            resposta = resposta_vinculo
+        if crise.detectar_risco(payload.mensagem):
+            # Prioridade absoluta sobre qualquer outro processamento — nunca
+            # deixa uma mensagem de risco cair no fluxo normal de comandos
+            # (cadastro incompleto, vínculo de cuidador, etc).
+            resposta = crise.mensagem_apoio()
         else:
-            usuario = buscar_usuario(telefone)
+            # Checa "vincular <código> <nome>" antes de tratar como paciente
+            # conhecido — senão um "oi" antes do vincular criaria um cadastro
+            # de paciente incompleto sem querer.
+            resposta_vinculo = await cuidadores.tentar_vincular(telefone, payload.mensagem)
 
-            if usuario is not None:
-                resposta = await _rotear_paciente(usuario, payload.mensagem)
-            elif await cuidadores.eh_cuidador(telefone):
-                resposta = (
-                    "Esse número só recebe avisos sobre quem te convidou. "
-                    "Se precisar de algo, fale direto com a pessoa. 🙂"
-                )
+            if resposta_vinculo is not None:
+                resposta = resposta_vinculo
             else:
-                usuario = criar_usuario(telefone)
-                resposta = await _rotear_paciente(usuario, payload.mensagem)
+                usuario = buscar_usuario(telefone)
+
+                if usuario is not None:
+                    resposta = await _rotear_paciente(usuario, payload.mensagem)
+                elif await cuidadores.eh_cuidador(telefone):
+                    resposta = (
+                        "Esse número só recebe avisos sobre quem te convidou. "
+                        "Se precisar de algo, fale direto com a pessoa. 🙂"
+                    )
+                else:
+                    usuario = criar_usuario(telefone)
+                    resposta = await _rotear_paciente(usuario, payload.mensagem)
     except Exception:
-        logger.exception("Falha ao processar mensagem de %s", telefone)
+        logger.exception("Falha ao processar mensagem de %s", log_id)
         resposta = _MENSAGEM_ERRO_INTERNO
 
     try:
         await enviar_mensagem(payload.telefone, resposta)
     except Exception:
-        logger.exception("Falha ao enviar resposta pra %s", telefone)
+        logger.exception("Falha ao enviar resposta pra %s", log_id)
 
     return {"status": "recebido"}

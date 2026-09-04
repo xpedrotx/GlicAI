@@ -101,6 +101,25 @@ def test_tentar_vincular_codigo_expirado():
     assert not fake.store.get("cuidadores")
 
 
+def test_tentar_vincular_bloqueia_apos_muitas_tentativas_de_codigo_invalido():
+    fake = FakeSupabase()
+    cuidadores.supabase = fake
+    usuario_id = str(uuid.uuid4())
+    _preparar_usuario(fake, usuario_id)
+    convite = _executar(cuidadores.criar_convite(usuario_id))
+    codigo_certo = convite["codigo"]
+
+    telefone_atacante = "5599999999999@c.us"
+    for _ in range(cuidadores.MAX_TENTATIVAS):
+        _executar(cuidadores.tentar_vincular(telefone_atacante, "vincular 000000 Maria"))
+
+    # código certo dessa vez, mas já bloqueado por tentativas anteriores
+    resposta = _executar(cuidadores.tentar_vincular(telefone_atacante, f"vincular {codigo_certo} Maria"))
+
+    assert "tentativas" in resposta.lower()
+    assert not fake.store.get("cuidadores")
+
+
 def test_eh_cuidador():
     fake = FakeSupabase()
     cuidadores.supabase = fake

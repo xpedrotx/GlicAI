@@ -1,5 +1,5 @@
 """Rotas HTTP de login/sessão do site de acompanhamento (CPF + senha)."""
-from fastapi import APIRouter, Cookie, Depends, HTTPException, Response
+from fastapi import APIRouter, Cookie, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 
 from app.config import settings
@@ -8,6 +8,16 @@ from app.services import auth_web
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 COOKIE_NOME = "glicai_sessao"
+
+
+def _ip_cliente(request: Request) -> str:
+    """IP real do paciente, não o do container do Caddy — o backend só é
+    alcançado via reverse_proxy, então o IP de conexão TCP (request.client)
+    é sempre o do Caddy. Caddy repassa o IP real em X-Forwarded-For."""
+    encaminhado = request.headers.get("x-forwarded-for")
+    if encaminhado:
+        return encaminhado.split(",")[0].strip()
+    return request.client.host if request.client else "desconhecido"
 
 
 def _setar_cookie_sessao(response: Response, token: str) -> None:
@@ -37,9 +47,9 @@ class ConfirmarCodigoBody(BaseModel):
 
 
 @router.post("/confirmar-codigo")
-async def confirmar_codigo(body: ConfirmarCodigoBody, response: Response):
+async def confirmar_codigo(body: ConfirmarCodigoBody, request: Request, response: Response):
     try:
-        token = await auth_web.confirmar_codigo(body.codigo.strip(), body.cpf, body.senha)
+        token = await auth_web.confirmar_codigo(body.codigo.strip(), body.cpf, body.senha, _ip_cliente(request))
     except auth_web.ErroAutenticacao as erro:
         raise HTTPException(status_code=400, detail=str(erro)) from erro
 
@@ -53,9 +63,9 @@ class LoginBody(BaseModel):
 
 
 @router.post("/login")
-async def login(body: LoginBody, response: Response):
+async def login(body: LoginBody, request: Request, response: Response):
     try:
-        token = await auth_web.login(body.cpf, body.senha)
+        token = await auth_web.login(body.cpf, body.senha, _ip_cliente(request))
     except auth_web.ErroAutenticacao as erro:
         raise HTTPException(status_code=401, detail=str(erro)) from erro
 

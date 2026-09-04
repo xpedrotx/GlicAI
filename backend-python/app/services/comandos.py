@@ -22,6 +22,12 @@ from app.services.whatsapp_sender import enviar_arquivo
 from app.utils import agora_usuario, formatar_hora_local, parse_hora, parse_numero, remover_acentos
 
 LIMITE_EMERGENCIA = 600
+# Nível 2 de hipoglicemia (ADA/EASD): abaixo disso já é "clinicamente
+# significativo, requer ação imediata" — risco real de confusão mental,
+# convulsão ou perda de consciência, não só "trate e meça de novo depois".
+# Limite fixo e absoluto, igual LIMITE_EMERGENCIA — não depende do
+# limite_baixo pessoal do perfil (que é só o gatilho do aviso normal).
+LIMITE_EMERGENCIA_BAIXO = 54
 
 
 async def _bloco_hiperglicemia(valor: float, correcao: dict) -> str:
@@ -67,6 +73,16 @@ def _mensagem_emergencia(valor: float) -> str:
     )
 
 
+def _mensagem_emergencia_baixa(valor: float) -> str:
+    return (
+        f"🚨 *Emergência — hipoglicemia grave, {valor:.0f} mg/dL*\n\n"
+        "⚠️ Trate AGORA com carboidrato de ação rápida (ex: suco, mel, "
+        "tablete de glicose) — não espere.\n\n"
+        "Se estiver confuso(a), muito fraco(a) ou não conseguir se tratar "
+        "sozinho(a), peça ajuda a alguém perto de você AGORA ou ligue *192* (SAMU)."
+    )
+
+
 _CONTEXTOS = {
     "jejum": "jejum",
     "pre_refeicao": "pre_refeicao",
@@ -98,6 +114,10 @@ def _normalizar_contexto(texto: str) -> str | None:
 _ALIASES_COMANDO_MULTIPALAVRA = {
     "tempo insulina ativa": "tempo_insulina_ativa",
     "criar senha": "criar_senha",
+    "excluir conta": "excluir_conta",
+    "excluir minha conta": "excluir_conta",
+    "apagar meus dados": "excluir_conta",
+    "apagar minha conta": "excluir_conta",
 }
 
 
@@ -184,6 +204,38 @@ async def _tentar_sugestao_ia(usuario: dict, mensagem: str) -> str:
     )
 
 
+async def _pedir_confirmacao_exclusao(usuario: dict) -> str:
+    """Exclusão de conta (direito de eliminação da LGPD) exige confirmação
+    explícita separada — apagar tudo por engano (ex: digitou o comando sem
+    querer) não tem volta. Reaproveita o mesmo mecanismo de sugestão
+    pendente + sim/não usado pra confirmar sugestão da IA."""
+    supabase.table("usuarios").update(
+        {
+            "sugestao_pendente": {
+                "comando": "confirmar_exclusao_conta",
+                "criado_em": datetime.now(timezone.utc).isoformat(),
+            }
+        }
+    ).eq("id", usuario["id"]).execute()
+
+    return (
+        "⚠️ *Isso apaga permanentemente todos os seus dados* — glicemias, "
+        "doses, perfil, cuidadores, tudo. Não tem como desfazer.\n\n"
+        "Responde *sim* pra confirmar, ou *não* pra cancelar."
+    )
+
+
+async def _excluir_conta(usuario: dict) -> str:
+    """Apaga a conta de verdade — todas as tabelas referenciam usuarios com
+    ON DELETE CASCADE, então um delete só aqui já limpa tudo (glicemias,
+    bolus, perfil, cuidadores, sessões web, lembretes etc)."""
+    supabase.table("usuarios").delete().eq("id", usuario["id"]).execute()
+    return (
+        "✅ Pronto — todos os seus dados foram apagados. Se quiser voltar a "
+        "usar o bot, é só mandar uma mensagem que o cadastro começa de novo."
+    )
+
+
 async def processar_comando(usuario: dict, mensagem: str) -> str:
     pendente = usuario.get("sugestao_pendente")
     if pendente:
@@ -237,6 +289,10 @@ async def processar_comando(usuario: dict, mensagem: str) -> str:
         return await _estoque(usuario, partes[1:])
     if comando == "criar_senha":
         return auth_web.gerar_codigo_login(usuario["id"])
+    if comando == "excluir_conta":
+        return await _pedir_confirmacao_exclusao(usuario)
+    if comando == "confirmar_exclusao_conta":
+        return await _excluir_conta(usuario)
 
     # atalho: mandar só um número vale como registro de glicemia
     if len(partes) == 1 and parse_numero(comando) is not None:
@@ -280,6 +336,21 @@ async def _glicemia(usuario: dict, args: list[str]) -> str:
         )
         aviso_estoque_emergencia = await estoque.consumir(usuario["id"], "fita_dextro", 1)
         return _mensagem_emergencia(valor) + linha_iob + (aviso_estoque_emergencia or "")
+
+    if valor < LIMITE_EMERGENCIA_BAIXO:
+        # Mesma urgência do lado alto — hipoglicemia grave é tão ou mais
+        # perigosa que hiperglicemia extrema, e matava mais rápido: registra,
+        # avisa os cuidadores na hora, sem esperar o ciclo normal de aviso.
+        supabase.table("registros_glicemia").insert(
+            {"usuario_id": usuario["id"], "valor": int(valor), "contexto": contexto}
+        ).execute()
+        await cuidadores.notificar_cuidadores(
+            usuario["id"],
+            f"🚨🚨 *Emergência* — a glicemia de {nome} está em *{valor:.0f} mg/dL* "
+            f"(hipoglicemia grave). Ajude a tratar agora.{linha_iob}",
+        )
+        aviso_estoque_emergencia = await estoque.consumir(usuario["id"], "fita_dextro", 1)
+        return _mensagem_emergencia_baixa(valor) + linha_iob + (aviso_estoque_emergencia or "")
 
     supabase.table("registros_glicemia").insert(
         {"usuario_id": usuario["id"], "valor": int(valor), "contexto": contexto}
@@ -361,6 +432,14 @@ async def _bolus(usuario: dict, args: list[str]) -> str:
         return "Não entendi o valor da glicemia. Tipo: *bolus 40g 130*"
     if glicemia > LIMITE_EMERGENCIA:
         return _mensagem_emergencia(glicemia)
+    if glicemia < LIMITE_EMERGENCIA_BAIXO:
+        nome = usuario.get("nome") or "Ele(a)"
+        await cuidadores.notificar_cuidadores(
+            usuario["id"],
+            f"🚨🚨 *Emergência* — a glicemia de {nome} está em *{glicemia:.0f} mg/dL* "
+            "(hipoglicemia grave). Ajude a tratar agora.",
+        )
+        return _mensagem_emergencia_baixa(glicemia)
 
     agora = agora_usuario(usuario.get("timezone") or "America/Sao_Paulo")
     resultado = await calcular_e_registrar_bolus(usuario["id"], carboidratos, glicemia, agora)
@@ -951,7 +1030,8 @@ def _ajuda() -> str:
         "*apliquei*/*glicemia* e aviso quando tá acabando (configura com *estoque configurar "
         "insulina 300* ou *estoque configurar fita 50*)\n\n"
         "🔑 *criar senha* — gera um código pra você acessar o site de acompanhamento "
-        "(glicia.pedrotx.com.br) com CPF e senha\n\n"
+        "(glicia.pedrotx.com.br) com CPF e senha\n"
+        "🗑️ *excluir conta* — apaga permanentemente todos os seus dados (pede confirmação antes)\n\n"
         "👨‍👩‍👧 *Quem acompanha sua glicemia*\n"
         "Pra convidar alguém (esposa, mãe etc): manda *cuidador convidar*, eu te dou um "
         "código de 6 dígitos válido por 30 min. Repassa esse código pra pessoa, e ela "

@@ -20,6 +20,30 @@ logger = logging.getLogger("glicia.cuidadores")
 
 MINUTOS_VALIDADE_CONVITE = 30
 
+# Rate limiting contra força bruta no código de convite (6 dígitos) — mesmo
+# raciocínio do login web (ver auth_web.py): sem isso, dá pra varrer o
+# espaço de códigos por automação dentro da janela de validade.
+JANELA_BLOQUEIO_MINUTOS = 15
+MAX_TENTATIVAS = 5
+
+
+def _bloqueado(telefone: str) -> bool:
+    limite = (datetime.now(timezone.utc) - timedelta(minutes=JANELA_BLOQUEIO_MINUTOS)).isoformat()
+    tentativas = (
+        supabase.table("tentativas_auth")
+        .select("id")
+        .eq("identificador", telefone)
+        .eq("tipo", "vincular")
+        .gte("criado_em", limite)
+        .execute()
+        .data
+    )
+    return len(tentativas) >= MAX_TENTATIVAS
+
+
+def _registrar_falha(telefone: str) -> None:
+    supabase.table("tentativas_auth").insert({"identificador": telefone, "tipo": "vincular"}).execute()
+
 
 async def tentar_vincular(telefone: str, mensagem: str) -> str | None:
     """
@@ -32,6 +56,9 @@ async def tentar_vincular(telefone: str, mensagem: str) -> str | None:
 
     if len(partes) < 3:
         return "Pra vincular, manda assim: *vincular <código> <seu nome>*"
+
+    if _bloqueado(telefone):
+        return "Muitas tentativas com código inválido. Aguarde alguns minutos e peça um código novo."
 
     codigo = partes[1]
     nome = " ".join(partes[2:])
@@ -47,6 +74,7 @@ async def tentar_vincular(telefone: str, mensagem: str) -> str | None:
         .data
     )
     if not convites:
+        _registrar_falha(telefone)
         return "Esse código não é válido ou já expirou. Peça um novo código pra quem te convidou."
 
     convite = convites[0]

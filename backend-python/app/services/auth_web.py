@@ -38,9 +38,42 @@ MINUTOS_VALIDADE_CODIGO = 10
 DIAS_VALIDADE_SESSAO = 30
 SENHA_MINIMO_CARACTERES = 8
 
+# Rate limiting contra força bruta no código de 6 dígitos e na senha —
+# bloqueia por IP depois de MAX_TENTATIVAS falhas em JANELA_BLOQUEIO_MINUTOS.
+# 6 dígitos = 1 milhão de combinações; sem isso, dá pra varrer via automação
+# dentro da janela de validade do próprio código (10 min).
+JANELA_BLOQUEIO_MINUTOS = 15
+MAX_TENTATIVAS = 5
+
 
 class ErroAutenticacao(Exception):
     """Erro esperado (código/CPF/senha inválidos) — a mensagem já é a que o usuário deve ver."""
+
+
+_MENSAGEM_BLOQUEIO = "Muitas tentativas. Aguarde alguns minutos antes de tentar de novo."
+
+
+def _bloqueado(identificador: str, tipo: str) -> bool:
+    limite = (datetime.now(timezone.utc) - timedelta(minutes=JANELA_BLOQUEIO_MINUTOS)).isoformat()
+    tentativas = (
+        supabase.table("tentativas_auth")
+        .select("id")
+        .eq("identificador", identificador)
+        .eq("tipo", tipo)
+        .gte("criado_em", limite)
+        .execute()
+        .data
+    )
+    return len(tentativas) >= MAX_TENTATIVAS
+
+
+def _registrar_falha(identificador: str, tipo: str) -> None:
+    supabase.table("tentativas_auth").insert({"identificador": identificador, "tipo": tipo}).execute()
+
+
+def _verificar_rate_limit(identificador: str, tipo: str) -> None:
+    if _bloqueado(identificador, tipo):
+        raise ErroAutenticacao(_MENSAGEM_BLOQUEIO)
 
 
 def gerar_codigo_login(usuario_id: str) -> str:
@@ -64,14 +97,26 @@ def gerar_codigo_login(usuario_id: str) -> str:
     )
 
 
-async def confirmar_codigo(codigo: str, cpf: str, senha: str) -> str:
+async def confirmar_codigo(codigo: str, cpf: str, senha: str, ip: str) -> str:
     """
     Confirma o código, valida CPF e senha, hasheia a senha e cria a sessão.
     O código sozinho já identifica o usuário (não precisa de telefone) —
     quem só souber um código alheio ainda precisaria adivinhar o CPF certo
     também, mas o código é a prova real de posse da conta.
     Retorna o token de sessão em texto puro (só o hash fica no banco).
+
+    "ip" é só pra rate limiting (ver _verificar_rate_limit) — nunca guardado
+    junto do código/CPF, só na tabela de tentativas falhas.
     """
+    _verificar_rate_limit(ip, "confirmar_codigo")
+    try:
+        return await _confirmar_codigo_interno(codigo, cpf, senha)
+    except ErroAutenticacao:
+        _registrar_falha(ip, "confirmar_codigo")
+        raise
+
+
+async def _confirmar_codigo_interno(codigo: str, cpf: str, senha: str) -> str:
     agora = datetime.now(timezone.utc).isoformat()
     pendentes = (
         supabase.table("codigos_login_web")
@@ -116,19 +161,24 @@ async def confirmar_codigo(codigo: str, cpf: str, senha: str) -> str:
     return await criar_sessao(usuario_id)
 
 
-async def login(cpf: str, senha: str) -> str:
+async def login(cpf: str, senha: str, ip: str) -> str:
     """
     Erro sempre com a mesma mensagem genérica ("CPF ou senha inválidos"),
     tanto pra CPF não encontrado quanto pra senha errada — não dá pra dar
     dica de qual dos dois estava errado (evita enumeração de CPFs válidos).
+
+    "ip" é só pra rate limiting (ver _verificar_rate_limit).
     """
+    _verificar_rate_limit(ip, "login")
     cpf_digitos = "".join(c for c in cpf if c.isdigit())
     resultado = supabase.table("usuarios").select("*").eq("cpf", cpf_digitos).limit(1).execute().data
     if not resultado:
+        _registrar_falha(ip, "login")
         raise ErroAutenticacao("CPF ou senha inválidos.")
     usuario = resultado[0]
     senha_hash = usuario.get("senha_hash")
     if not senha_hash or not bcrypt.checkpw(senha.encode(), senha_hash.encode()):
+        _registrar_falha(ip, "login")
         raise ErroAutenticacao("CPF ou senha inválidos.")
     return await criar_sessao(usuario["id"])
 
