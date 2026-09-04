@@ -70,17 +70,37 @@ client.on('message', async (message) => {
   }
 });
 
+// Retry curto pra um bug conhecido e ainda sem correção do whatsapp-web.js
+// (WhatsApp Web removeu uma função interna que a lib usa — ver
+// https://github.com/wwebjs/whatsapp-web.js/issues/201761): de vez em quando
+// client.sendMessage() quebra com "canCheckStatusRankingPosterGating is not
+// a function" mesmo com o cliente conectado e pronto. É intermitente (nunca
+// se repete 2x seguidas nos logs), então uma nova tentativa depois de uma
+// pequena espera resolve a maioria dos casos. Só 1 retry, de propósito: não
+// dá pra confirmar que a mensagem nunca chega a ser entregue antes do erro
+// estourar, então mais tentativas aumentariam o risco de duplicar mensagem
+// (pior pra um bot de alerta clínico do que raramente perder uma).
+async function _enviarComRetry(fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    console.warn('[glicai-bridge] Envio falhou, tentando novamente em 5s:', err.message);
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    return await fn();
+  }
+}
+
 // Usado pelo backend Python pra enviar mensagens (respostas, lembretes, alertas).
 // "telefone" é sempre o JID completo original (@c.us ou @lid) — nunca reconstruído
 // a partir só do número, contas @lid não são endereçáveis via @c.us (e vice-versa).
 async function enviarMensagem(telefone, texto) {
-  await client.sendMessage(telefone, texto);
+  await _enviarComRetry(() => client.sendMessage(telefone, texto));
 }
 
 // Usado pelo backend Python pra mandar arquivos (ex: PDF de exportação).
 async function enviarArquivo(telefone, nomeArquivo, mimetype, conteudoBase64) {
   const media = new MessageMedia(mimetype, conteudoBase64, nomeArquivo);
-  await client.sendMessage(telefone, media, { sendMediaAsDocument: true });
+  await _enviarComRetry(() => client.sendMessage(telefone, media, { sendMediaAsDocument: true }));
 }
 
 module.exports = { client, enviarMensagem, enviarArquivo };
