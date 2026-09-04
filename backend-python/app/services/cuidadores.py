@@ -28,21 +28,31 @@ MAX_TENTATIVAS = 5
 
 
 def _bloqueado(telefone: str) -> bool:
-    limite = (datetime.now(timezone.utc) - timedelta(minutes=JANELA_BLOQUEIO_MINUTOS)).isoformat()
-    tentativas = (
-        supabase.table("tentativas_auth")
-        .select("id")
-        .eq("identificador", telefone)
-        .eq("tipo", "vincular")
-        .gte("criado_em", limite)
-        .execute()
-        .data
-    )
-    return len(tentativas) >= MAX_TENTATIVAS
+    """Nunca levanta exceção — se a checagem falhar (ex: tabela ainda não
+    migrada), assume que NÃO está bloqueado (ver mesmo raciocínio em
+    auth_web.py: rate limiting não pode derrubar o fluxo principal)."""
+    try:
+        limite = (datetime.now(timezone.utc) - timedelta(minutes=JANELA_BLOQUEIO_MINUTOS)).isoformat()
+        tentativas = (
+            supabase.table("tentativas_auth")
+            .select("id")
+            .eq("identificador", telefone)
+            .eq("tipo", "vincular")
+            .gte("criado_em", limite)
+            .execute()
+            .data
+        )
+        return len(tentativas) >= MAX_TENTATIVAS
+    except Exception:
+        logger.exception("Falha ao checar rate limit de vínculo — seguindo sem bloquear")
+        return False
 
 
 def _registrar_falha(telefone: str) -> None:
-    supabase.table("tentativas_auth").insert({"identificador": telefone, "tipo": "vincular"}).execute()
+    try:
+        supabase.table("tentativas_auth").insert({"identificador": telefone, "tipo": "vincular"}).execute()
+    except Exception:
+        logger.exception("Falha ao registrar tentativa de vínculo")
 
 
 async def tentar_vincular(telefone: str, mensagem: str) -> str | None:

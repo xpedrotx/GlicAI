@@ -24,6 +24,7 @@ separada, e é consistente com o padrão já usado no projeto pra
 códigos/convites (tabela com expiração + uso único).
 """
 import hashlib
+import logging
 import random
 import secrets
 import string
@@ -52,23 +53,37 @@ class ErroAutenticacao(Exception):
 
 _MENSAGEM_BLOQUEIO = "Muitas tentativas. Aguarde alguns minutos antes de tentar de novo."
 
+_logger = logging.getLogger("glicia.auth_web")
+
 
 def _bloqueado(identificador: str, tipo: str) -> bool:
-    limite = (datetime.now(timezone.utc) - timedelta(minutes=JANELA_BLOQUEIO_MINUTOS)).isoformat()
-    tentativas = (
-        supabase.table("tentativas_auth")
-        .select("id")
-        .eq("identificador", identificador)
-        .eq("tipo", tipo)
-        .gte("criado_em", limite)
-        .execute()
-        .data
-    )
-    return len(tentativas) >= MAX_TENTATIVAS
+    """Nunca levanta exceção: se a checagem falhar (ex: tabela ainda não
+    migrada), assume que NÃO está bloqueado — rate limiting é uma camada
+    extra de proteção, não pode derrubar login/confirmação de código pra
+    todo mundo por causa disso."""
+    try:
+        limite = (datetime.now(timezone.utc) - timedelta(minutes=JANELA_BLOQUEIO_MINUTOS)).isoformat()
+        tentativas = (
+            supabase.table("tentativas_auth")
+            .select("id")
+            .eq("identificador", identificador)
+            .eq("tipo", tipo)
+            .gte("criado_em", limite)
+            .execute()
+            .data
+        )
+        return len(tentativas) >= MAX_TENTATIVAS
+    except Exception:
+        _logger.exception("Falha ao checar rate limit (tipo=%s) — seguindo sem bloquear", tipo)
+        return False
 
 
 def _registrar_falha(identificador: str, tipo: str) -> None:
-    supabase.table("tentativas_auth").insert({"identificador": identificador, "tipo": tipo}).execute()
+    """Mesma lógica de nunca derrubar o fluxo principal por causa disso."""
+    try:
+        supabase.table("tentativas_auth").insert({"identificador": identificador, "tipo": tipo}).execute()
+    except Exception:
+        _logger.exception("Falha ao registrar tentativa (tipo=%s)", tipo)
 
 
 def _verificar_rate_limit(identificador: str, tipo: str) -> None:
