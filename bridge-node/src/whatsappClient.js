@@ -101,50 +101,26 @@ async function _enviarComRetry(fn) {
 const DIGITANDO_MIN_MS = 5000;
 const DIGITANDO_MAX_MS = 10000;
 
-// Diagnóstico temporário — err.message sozinho tava vindo só "r" (erro
-// minificado do bundle do WhatsApp Web), sem dar pra saber se quem falhou
-// foi getChatById ou sendStateTyping. Loga qual etapa e o erro completo.
-function _logFalhaDigitando(tentativa, etapa, err) {
-  console.warn(`[glicai-bridge] "digitando" falhou em ${etapa} (tentativa ${tentativa}/2):`, {
-    name: err && err.name,
-    message: err && err.message,
-    stack: err && err.stack,
-    tipo: typeof err,
-    json: (() => { try { return JSON.stringify(err); } catch { return '(não serializável)'; } })(),
-  });
-}
-
 // Mostra "digitando..." no chat por alguns segundos antes de mandar a
 // mensagem — só pra humanizar (uma resposta instantânea de bot é o que mais
 // entrega que é automação). Duração aleatória entre 5-10s, não um valor
 // fixo, pelo mesmo motivo. Falha em mostrar o indicador nunca deve impedir
 // o envio de verdade — só loga e segue.
 async function _simularDigitando(telefone) {
-  // getChatById pode falhar pra uma conversa que o client ainda não
-  // sincronizou (comum logo depois de reconectar, ou na primeira mensagem
-  // de um paciente novo) — problema conhecido do whatsapp-web.js, ver
-  // https://github.com/wwebjs/whatsapp-web.js/issues/3572. 1 retry curto
-  // resolve a maioria; se persistir, segue sem o indicador mesmo.
-  for (let tentativa = 1; tentativa <= 2; tentativa++) {
-    let chat;
+  // Contas no novo sistema de identidade @lid do WhatsApp quebram o
+  // getChatById de forma conhecida e ainda sem correção lançada no
+  // whatsapp-web.js (ver https://github.com/pedroslopez/whatsapp-web.js/issues/3834
+  // — a correção proposta na PR #3703 exige um patch de baixo nível no
+  // código interno minificado do WhatsApp Web, frágil demais pra replicar
+  // aqui). O envio da mensagem em si funciona normal pra @lid, só o
+  // indicador de "digitando" que não — pula direto pra esses contatos, sem
+  // gastar tentativa fadada a falhar.
+  if (!telefone.endsWith('@lid')) {
     try {
-      chat = await client.getChatById(telefone);
+      const chat = await client.getChatById(telefone);
+      if (chat) await chat.sendStateTyping();
     } catch (err) {
-      _logFalhaDigitando(tentativa, 'getChatById', err);
-      if (tentativa < 2) { await new Promise((resolve) => setTimeout(resolve, 1500)); continue; }
-      break;
-    }
-    if (!chat) {
-      _logFalhaDigitando(tentativa, 'getChatById retornou vazio', null);
-      if (tentativa < 2) { await new Promise((resolve) => setTimeout(resolve, 1500)); continue; }
-      break;
-    }
-    try {
-      await chat.sendStateTyping();
-      break;
-    } catch (err) {
-      _logFalhaDigitando(tentativa, 'sendStateTyping', err);
-      if (tentativa < 2) await new Promise((resolve) => setTimeout(resolve, 1500));
+      console.warn('[glicai-bridge] Falha ao simular "digitando":', (err && err.message) || err);
     }
   }
   const esperaMs = DIGITANDO_MIN_MS + Math.random() * (DIGITANDO_MAX_MS - DIGITANDO_MIN_MS);
