@@ -107,11 +107,24 @@ const DIGITANDO_MAX_MS = 10000;
 // fixo, pelo mesmo motivo. Falha em mostrar o indicador nunca deve impedir
 // o envio de verdade — só loga e segue.
 async function _simularDigitando(telefone) {
-  try {
-    const chat = await client.getChatById(telefone);
-    await chat.sendStateTyping();
-  } catch (err) {
-    console.warn('[glicai-bridge] Falha ao simular "digitando":', err.message);
+  // getChatById pode falhar pra uma conversa que o client ainda não
+  // sincronizou (comum logo depois de reconectar, ou na primeira mensagem
+  // de um paciente novo) — problema conhecido do whatsapp-web.js, ver
+  // https://github.com/wwebjs/whatsapp-web.js/issues/3572. 1 retry curto
+  // resolve a maioria; se persistir, segue sem o indicador mesmo.
+  for (let tentativa = 1; tentativa <= 2; tentativa++) {
+    try {
+      const chat = await client.getChatById(telefone);
+      await chat.sendStateTyping();
+      break;
+    } catch (err) {
+      if (tentativa === 2) {
+        const motivo = (err && err.message) || String(err);
+        console.warn(`[glicai-bridge] Falha ao simular "digitando" (2 tentativas):`, motivo);
+      } else {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+      }
+    }
   }
   const esperaMs = DIGITANDO_MIN_MS + Math.random() * (DIGITANDO_MAX_MS - DIGITANDO_MIN_MS);
   await new Promise((resolve) => setTimeout(resolve, esperaMs));
