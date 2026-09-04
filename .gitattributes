@@ -1,0 +1,6 @@
+# Força LF em todo arquivo de texto, independente do core.autocrlf de quem
+# clona/commita — sem isso, um checkout ou `git archive` feito no Windows
+# pode reintroduzir CRLF em scripts shell, quebrando o shebang (#!/bin/sh)
+# quando o arquivo roda dentro de um container Linux (ver docker-entrypoint.sh).
+* text=auto eol=lf
+*.sh text eol=lf

@@ -17,10 +17,18 @@ MINUTOS_REMEDICAO = 15
 
 
 async def agendar(usuario_id: str) -> None:
-    disparar_em = datetime.now(timezone.utc) + timedelta(minutes=MINUTOS_REMEDICAO)
-    supabase.table("lembretes_remedicao").insert(
-        {"usuario_id": usuario_id, "disparar_em": disparar_em.isoformat(), "enviado": False}
-    ).execute()
+    """Nunca levanta exceção — isso é chamado no meio do fluxo de resposta a
+    uma hipoglicemia (ver comandos.py), e uma falha aqui (ex: tabela ainda
+    não migrada) não pode derrubar o aviso crítico que o paciente precisa
+    ver. Sem o lembrete agendado, o pior caso é só não receber o "meça de
+    novo em 15min" — o aviso principal de hipo continua saindo normal."""
+    try:
+        disparar_em = datetime.now(timezone.utc) + timedelta(minutes=MINUTOS_REMEDICAO)
+        supabase.table("lembretes_remedicao").insert(
+            {"usuario_id": usuario_id, "disparar_em": disparar_em.isoformat(), "enviado": False}
+        ).execute()
+    except Exception:
+        logger.exception("Falha ao agendar lembrete de remedição pro usuário %s", usuario_id)
 
 
 def _buscar_usuario(usuario_id: str) -> dict | None:
