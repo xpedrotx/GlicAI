@@ -101,6 +101,19 @@ async function _enviarComRetry(fn) {
 const DIGITANDO_MIN_MS = 5000;
 const DIGITANDO_MAX_MS = 10000;
 
+// Diagnóstico temporário — err.message sozinho tava vindo só "r" (erro
+// minificado do bundle do WhatsApp Web), sem dar pra saber se quem falhou
+// foi getChatById ou sendStateTyping. Loga qual etapa e o erro completo.
+function _logFalhaDigitando(tentativa, etapa, err) {
+  console.warn(`[glicai-bridge] "digitando" falhou em ${etapa} (tentativa ${tentativa}/2):`, {
+    name: err && err.name,
+    message: err && err.message,
+    stack: err && err.stack,
+    tipo: typeof err,
+    json: (() => { try { return JSON.stringify(err); } catch { return '(não serializável)'; } })(),
+  });
+}
+
 // Mostra "digitando..." no chat por alguns segundos antes de mandar a
 // mensagem — só pra humanizar (uma resposta instantânea de bot é o que mais
 // entrega que é automação). Duração aleatória entre 5-10s, não um valor
@@ -113,17 +126,25 @@ async function _simularDigitando(telefone) {
   // https://github.com/wwebjs/whatsapp-web.js/issues/3572. 1 retry curto
   // resolve a maioria; se persistir, segue sem o indicador mesmo.
   for (let tentativa = 1; tentativa <= 2; tentativa++) {
+    let chat;
     try {
-      const chat = await client.getChatById(telefone);
+      chat = await client.getChatById(telefone);
+    } catch (err) {
+      _logFalhaDigitando(tentativa, 'getChatById', err);
+      if (tentativa < 2) { await new Promise((resolve) => setTimeout(resolve, 1500)); continue; }
+      break;
+    }
+    if (!chat) {
+      _logFalhaDigitando(tentativa, 'getChatById retornou vazio', null);
+      if (tentativa < 2) { await new Promise((resolve) => setTimeout(resolve, 1500)); continue; }
+      break;
+    }
+    try {
       await chat.sendStateTyping();
       break;
     } catch (err) {
-      if (tentativa === 2) {
-        const motivo = (err && err.message) || String(err);
-        console.warn(`[glicai-bridge] Falha ao simular "digitando" (2 tentativas):`, motivo);
-      } else {
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-      }
+      _logFalhaDigitando(tentativa, 'sendStateTyping', err);
+      if (tentativa < 2) await new Promise((resolve) => setTimeout(resolve, 1500));
     }
   }
   const esperaMs = DIGITANDO_MIN_MS + Math.random() * (DIGITANDO_MAX_MS - DIGITANDO_MIN_MS);
