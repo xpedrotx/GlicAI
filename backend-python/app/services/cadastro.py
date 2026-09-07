@@ -361,14 +361,12 @@ async def _finalizar(usuario, dados) -> str:
     primeiro_nome = dados["nome"].split()[0]
     return (
         f"🙌 *Prontinho, {primeiro_nome}! Seu cadastro tá completo.*\n\n"
-        "A partir de agora você pode:\n"
-        "🩸 *glicemia 110* — registrar uma medição\n"
-        "💉 *bolus 40 130* — calcular a dose (carboidratos e glicemia atual)\n"
-        "✅ *apliquei 4.5* — dizer quanto você realmente aplicou\n"
-        "📋 *perfil* — ver seus dados\n"
-        "⏰ *basal* — ver seus horários\n"
-        "🔁 *modificador ativar/desativar <nome>* — ligar ou desligar um modificador\n\n"
-        "Se precisar dessa lista de novo, é só mandar *ajuda*."
+        "Agora é só falar comigo do seu jeito, tipo:\n"
+        "🩸 _\"minha glicose deu 110\"_ — registro a medição\n"
+        "💉 _\"vou comer 40g de carboidrato, tá 130\"_ — calculo a dose\n"
+        "✅ _\"tomei 4.5 unidades\"_ — registro o que você aplicou\n"
+        "📋 _\"quais são meus dados\"_ — mostro seu perfil\n\n"
+        "Se preferir os comandos certinhos, manda *ajuda* que eu te mostro a lista."
     )
 
 

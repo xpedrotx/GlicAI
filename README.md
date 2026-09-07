@@ -8,8 +8,15 @@ completo — tudo por mensagem de texto, sem app pra instalar.
 
 Manda uma mensagem pro número do bot no WhatsApp — **(44) 92006-0455** — e
 segue o cadastro guiado (nome, metas de glicemia, fator de sensibilidade,
-relação insulina:carboidrato, basal). Depois disso, os comandos disponíveis
-são:
+relação insulina:carboidrato, basal). Depois disso, pode falar do seu jeito
+— tipo *"minha glicose deu 110 em jejum"* ou *"tomei 4 unidades"* — que o
+bot entende (usa IA só pra traduzir a frase pro comando certo; quem calcula
+dose e registra dado continua sendo sempre o mesmo código determinístico).
+Ações que só leem informação (perfil, relatório etc) já respondem na hora;
+qualquer coisa que grava dado clínico ou é irreversível (glicemia, dose,
+excluir conta) sempre pede confirmação explícita antes.
+
+Se preferir os comandos certinhos, também funcionam:
 
 - `glicemia <valor> [contexto]` — registra uma medição (contexto opcional:
   `jejum`, `pre_refeicao`, `pos_prandial`, `correcao`; mandar só o número
@@ -37,6 +44,7 @@ são:
 - `cuidador convidar/listar/remover <nome>` — convida alguém (esposa, mãe
   etc.) pra acompanhar sua glicemia.
 - `criar senha` — gera acesso ao site de acompanhamento.
+- `excluir conta` — apaga permanentemente todos os seus dados (pede confirmação antes).
 - `ajuda` (ou `oi`) — lista todos os comandos.
 
 ### Monitoria familiar

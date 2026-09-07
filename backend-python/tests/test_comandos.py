@@ -89,10 +89,12 @@ def test_comando_nao_reconhecido_sem_ia_configurada_pede_ajuda():
     with patch.object(comandos.ia, "sugerir_comando", new=AsyncMock(return_value=None)):
         resposta = _executar(comandos.processar_comando(usuario, "blablabla comando estranho"))
 
-    assert "Não entendi esse comando" in resposta
+    assert "Não entendi" in resposta
 
 
-def test_fallback_ia_sugere_e_pede_confirmacao():
+def test_fallback_ia_comando_seguro_executa_direto_sem_confirmar():
+    """Comando só de leitura (ex: 'ajuda') a IA já executa na hora — errar
+    aqui não tem custo real, então não precisa perguntar sim/não."""
     fake = FakeSupabase()
     comandos.supabase = fake
     usuario = _criar_usuario(fake)
@@ -101,11 +103,29 @@ def test_fallback_ia_sugere_e_pede_confirmacao():
     with patch.object(comandos.ia, "sugerir_comando", new=sugestao):
         resposta = _executar(comandos.processar_comando(usuario, "me ajuda por favor"))
 
-    assert "ajuda" in resposta.lower()
+    assert "Aqui está tudo o que eu sei fazer" in resposta
+    linha = fake.table("usuarios").select("*").eq("id", usuario["id"]).execute().data[0]
+    assert linha.get("sugestao_pendente") is None
+
+
+def test_fallback_ia_comando_critico_pede_confirmacao_com_frase_humana():
+    """Comando que grava dado clínico (ex: 'apliquei') continua pedindo
+    confirmação — e a frase mostrada é em português normal, não o comando
+    técnico cru."""
+    fake = FakeSupabase()
+    comandos.supabase = fake
+    usuario = _criar_usuario(fake)
+
+    sugestao = AsyncMock(return_value={"comando": "apliquei 4.5", "confianca": "alta"})
+    with patch.object(comandos.ia, "sugerir_comando", new=sugestao):
+        resposta = _executar(comandos.processar_comando(usuario, "acabei de tomar 4.5 unidades"))
+
+    assert "apliquei 4.5" not in resposta  # nunca mostra o comando técnico cru
+    assert "aplicou 4.5" in resposta.lower()
     assert "sim" in resposta.lower() and "não" in resposta.lower()
 
     linha = fake.table("usuarios").select("*").eq("id", usuario["id"]).execute().data[0]
-    assert linha["sugestao_pendente"]["comando"] == "ajuda"
+    assert linha["sugestao_pendente"]["comando"] == "apliquei 4.5"
 
 
 def test_confirmar_sugestao_com_sim_executa_o_comando():
@@ -633,7 +653,7 @@ def test_sugestao_expirada_nao_e_confirmada():
     with patch.object(comandos.ia, "sugerir_comando", new=AsyncMock(return_value=None)):
         resposta = _executar(comandos.processar_comando(usuario, "sim"))
 
-    assert "Não entendi esse comando" in resposta
+    assert "Não entendi" in resposta
     linha = fake.table("usuarios").select("*").eq("id", usuario["id"]).execute().data[0]
     assert linha["sugestao_pendente"] is None
 
@@ -802,3 +822,39 @@ def test_apagar_meus_dados_e_alias_de_excluir_conta():
     resposta = _executar(comandos.processar_comando(usuario, "apagar meus dados"))
 
     assert "apaga permanentemente" in resposta.lower()
+
+
+# --------------------------------------------------------------------------
+# classificação seguro/crítico e descrição em português dos comandos que a
+# IA sugere — o paciente nunca deveria ver o token técnico cru.
+# --------------------------------------------------------------------------
+
+def test_comando_e_seguro_classifica_leitura_como_seguro():
+    for comando in ("ajuda", "oi", "perfil", "basal", "relatorio semana", "exportar", "hba1c", "padroes", "criar_senha"):
+        assert comandos._comando_e_seguro(comando), f"{comando!r} devia ser seguro"
+
+
+def test_comando_e_seguro_classifica_escrita_como_critico():
+    for comando in (
+        "glicemia 110", "bolus 40 130", "apliquei 4", "tratei", "editar meta 110",
+        "modificador ativar exercicio", "tempo_insulina_ativa 4", "excluir_conta",
+        "confirmar_exclusao_conta",
+    ):
+        assert not comandos._comando_e_seguro(comando), f"{comando!r} devia ser crítico"
+
+
+def test_comando_e_seguro_diferencia_subacao_de_leitura_e_escrita():
+    assert comandos._comando_e_seguro("cuidador listar")
+    assert not comandos._comando_e_seguro("cuidador convidar")
+    assert not comandos._comando_e_seguro("cuidador remover Maria")
+    assert comandos._comando_e_seguro("lembrete listar")
+    assert not comandos._comando_e_seguro("lembrete adicionar 08:00")
+    assert comandos._comando_e_seguro("estoque")
+    assert not comandos._comando_e_seguro("estoque configurar insulina 300")
+
+
+def test_descrever_comando_traduz_pra_portugues_sem_underscore():
+    assert "_" not in comandos._descrever_comando("tempo_insulina_ativa 4")
+    assert "4 horas" in comandos._descrever_comando("tempo_insulina_ativa 4")
+    assert "40" in comandos._descrever_comando("bolus 40 130") and "130" in comandos._descrever_comando("bolus 40 130")
+    assert "4.5" in comandos._descrever_comando("apliquei 4.5")

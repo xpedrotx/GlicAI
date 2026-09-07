@@ -181,26 +181,96 @@ async def _tratar_sugestao_pendente(usuario: dict, mensagem: str, pendente: dict
     return await processar_comando(usuario, comando_sugerido)
 
 
+# Comandos que só leem/informam (nunca registram glicemia, dose, mudam
+# perfil/cuidadores/lembretes nem apagam nada) — a IA pode executar direto,
+# sem pedir confirmação, porque errar aqui não tem custo real: na pior das
+# hipóteses mostra a informação errada e o paciente pede de novo. Qualquer
+# coisa que grava dado clínico ou é destrutiva continua pedindo *sim/não*.
+_COMANDOS_SEGUROS_SEM_SUBACAO = {
+    "ajuda", "menu", "help", "oi", "ola", "oii", "oie", "eae", "hey", "hello",
+    "perfil", "basal", "relatorio", "exportar", "hba1c", "gmi", "padroes", "padrao",
+    "criar_senha",
+}
+
+
+def _comando_e_seguro(comando_texto: str) -> bool:
+    partes = _normalizar_prefixo_multipalavra(comando_texto).strip().split()
+    if not partes:
+        return True  # mensagem vazia cai no _ajuda(), sem risco
+    comando = remover_acentos(partes[0].lower())
+
+    if comando in _COMANDOS_SEGUROS_SEM_SUBACAO:
+        return True
+    # "cuidador"/"estoque"/"lembrete" sem sub-ação (ou só "listar") são
+    # leitura; qualquer outra sub-ação (convidar, remover, configurar,
+    # reabastecer, adicionar) muda dado e continua exigindo confirmação.
+    if comando in ("cuidador", "lembrete") and len(partes) > 1 and partes[1].lower() == "listar":
+        return True
+    if comando == "estoque" and len(partes) == 1:
+        return True
+    return False
+
+
+def _descrever_comando(comando_texto: str) -> str:
+    """Traduz o comando técnico (o que a IA devolve, ex: 'tempo_insulina_ativa 4')
+    pra uma frase em português normal, pra mostrar na confirmação — o
+    paciente nunca deveria ver um nome de comando com underscore."""
+    partes = _normalizar_prefixo_multipalavra(comando_texto).strip().split()
+    if not partes:
+        return comando_texto
+    comando = remover_acentos(partes[0].lower())
+    args = partes[1:]
+
+    if comando == "glicemia" and args:
+        resto = " ".join(args[1:])
+        return f"registrar sua glicemia em {args[0]}" + (f" ({resto})" if resto else "")
+    if comando == "bolus" and len(args) >= 2:
+        return f"calcular o bolus pra {args[0]} de carboidrato com glicemia {args[1]}"
+    if comando == "apliquei" and args:
+        return f"registrar que você aplicou {args[0]} de insulina"
+    if comando == "tratei":
+        return "confirmar que você tratou a hipoglicemia"
+    if comando == "editar" and len(args) >= 2:
+        return f"mudar seu(sua) {args[0]} pra {args[1]}"
+    if comando == "modificador" and len(args) >= 2:
+        return f"{args[0]} o modificador \"{' '.join(args[1:])}\""
+    if comando == "tempo_insulina_ativa" and args:
+        return f"configurar seu tempo de insulina ativa pra {args[0]} horas"
+    if comando == "lembrete" and args:
+        return f"{args[0]} lembrete" + (f" ({' '.join(args[1:])})" if len(args) > 1 else "")
+    if comando == "cuidador" and args:
+        return f"{args[0]} cuidador" + (f" ({' '.join(args[1:])})" if len(args) > 1 else "")
+    if comando == "estoque" and args:
+        return f"{args[0]} o estoque" + (f" ({' '.join(args[1:])})" if len(args) > 1 else "")
+    return comando_texto
+
+
 async def _tentar_sugestao_ia(usuario: dict, mensagem: str) -> str:
-    """Último recurso quando nenhum comando bate: pede pra IA sugerir um
-    comando (nunca executa nada sozinha) e, se achar algo com confiança
-    razoável, guarda a sugestão e pede confirmação explícita ao paciente."""
+    """Último recurso quando nenhum comando bate: pede pra IA interpretar a
+    mensagem em linguagem natural e traduzir pro comando certo. Comando
+    seguro (só leitura) executa na hora; qualquer coisa que grava dado
+    clínico ou é destrutiva ainda pede confirmação explícita antes."""
     sugestao = await ia.sugerir_comando(mensagem)
     if sugestao is None:
-        return "Não entendi esse comando. Manda *ajuda* pra ver o que eu sei fazer."
+        return 'Não entendi. Pode falar do seu jeito (ex: "minha glicose deu 110") ou mandar *ajuda* pra ver a lista de comandos.'
+
+    comando_sugerido = sugestao["comando"]
+
+    if _comando_e_seguro(comando_sugerido):
+        return await processar_comando(usuario, comando_sugerido)
 
     supabase.table("usuarios").update(
         {
             "sugestao_pendente": {
-                "comando": sugestao["comando"],
+                "comando": comando_sugerido,
                 "criado_em": datetime.now(timezone.utc).isoformat(),
             }
         }
     ).eq("id", usuario["id"]).execute()
 
     return (
-        f"Não entendi certinho... você quis dizer *{sugestao['comando']}*?\n"
-        "Responde *sim* pra eu fazer isso, ou *não* pra cancelar."
+        f"Você quis dizer: *{_descrever_comando(comando_sugerido)}*?\n"
+        "Responde *sim* pra confirmar, ou *não* pra cancelar."
     )
 
 
@@ -1002,6 +1072,9 @@ def _saudacao(usuario: dict) -> str:
 def _ajuda() -> str:
     return (
         "📖 *Aqui está tudo o que eu sei fazer:*\n\n"
+        "Pode falar do seu jeito, tipo _\"minha glicose deu 110 em jejum\"_ ou "
+        "_\"tomei 4 unidades\"_ — eu entendo. Se preferir os comandos certinhos, "
+        "aqui está a lista:\n\n"
         "*Registro do dia a dia*\n"
         "🩸 *glicemia 110* — registra uma medição (pode incluir o contexto: "
         "jejum, pre_refeicao, pos_prandial, correcao). Se estiver fora da sua "
@@ -1041,8 +1114,9 @@ def _ajuda() -> str:
         "(eu te lembro 2 vezes antes disso), ela recebe um aviso automático.\n"
         "• *cuidador listar* — vê quem já acompanha você\n"
         "• *cuidador remover <nome>* — tira alguém da lista\n\n"
-        "Se eu não reconhecer o que você mandou, eu tento adivinhar o comando "
-        "certo e te pergunto antes de fazer qualquer coisa — nunca aplico "
-        "dose nem registro nada sem você confirmar.\n\n"
+        "Se eu não reconhecer o que você mandou, eu tento adivinhar — pra "
+        "coisa simples (ver perfil, relatório etc) eu já faço na hora; pra "
+        "qualquer coisa que grava dado (glicemia, dose, perfil) ou é "
+        "irreversível (excluir conta), eu sempre confirmo antes com você.\n\n"
         "Pode mandar *ajuda* ou *oi* sempre que quiser ver essa lista de novo."
     )

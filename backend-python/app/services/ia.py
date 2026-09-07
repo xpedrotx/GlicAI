@@ -1,9 +1,15 @@
-"""Fallback de IA pra interpretar comandos que o roteador não reconheceu.
+"""Fallback de IA pra interpretar comandos que o roteador não reconheceu —
+é o que permite o paciente falar em linguagem natural (ex: "minha glicose
+deu 110") em vez de decorar sintaxe de comando.
 
 Nunca executa nada sozinha — só *sugere* um comando, e quem chama
-(comandos.py) sempre pede confirmação explícita antes de rodar. Sem
-ANTHROPIC_API_KEY (ou se a chamada falhar), sugerir_comando() retorna None
-e o bot cai na mensagem padrão "não entendi esse comando".
+(comandos.py) decide se roda na hora (comando só de leitura, ex: "perfil")
+ou pede confirmação explícita antes (qualquer coisa que grava dado clínico
+ou é destrutiva, ex: "apliquei"/"glicemia"/"excluir_conta" — essa última
+nem faz parte da lista abaixo, de propósito: exclusão de conta só via
+comando exato, nunca por adivinhação da IA). Sem ANTHROPIC_API_KEY (ou se a
+chamada falhar), sugerir_comando() retorna None e o bot cai na mensagem
+padrão "não entendi".
 """
 import logging
 
@@ -32,6 +38,8 @@ _COMANDOS_DISPONIVEIS = """
 - hba1c [dias] — estimativa de HbA1c/GMI
 - padroes [dias] — detecta padrões de glicemia por dia da semana/período
 - cuidador <convidar|listar|remover> [nome] — gerencia quem acompanha o paciente
+- estoque — mostra o estoque de insulina e fitas de dextro
+- criar_senha — gera um código de acesso ao site de acompanhamento
 """.strip()
 
 _SISTEMA = (
