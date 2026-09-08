@@ -599,14 +599,52 @@ def test_apliquei_horario_futuro_e_rejeitado():
     assert fake.store.get("registros_bolus", []) == []
 
 
-def test_apliquei_horario_invalido_pede_formato():
+def test_apliquei_horario_invalido_cai_pro_fallback_de_ia():
+    """Horário que não bate com o formato rígido (ex: "25:99") não mostra
+    mais erro técnico de sintaxe — cai pra IA tentar reinterpretar a frase
+    inteira (ver _SintaxeNaoReconhecida em comandos.py)."""
     fake = FakeSupabase()
     _ligar_supabase_glicemia(fake)
     usuario = _criar_usuario(fake)
 
-    resposta = _executar(comandos.processar_comando(usuario, "apliquei 6 25:99"))
+    with patch.object(comandos.ia, "sugerir_comando", new=AsyncMock(return_value=None)):
+        resposta = _executar(comandos.processar_comando(usuario, "apliquei 6 25:99"))
 
-    assert "hh:mm" in resposta.lower() or "horário" in resposta.lower()
+    assert "Não entendi" in resposta
+    assert fake.store.get("registros_bolus", []) == []
+
+
+def test_apliquei_com_palavra_extra_de_unidade_funciona_direto_sem_ia():
+    """'apliquei 8 unidades' não precisa nem chamar a IA — "unidades" já é
+    ignorado como palavra de preenchimento antes de tentar parsear horário."""
+    fake = FakeSupabase()
+    _ligar_supabase_glicemia(fake)
+    usuario = _criar_usuario(fake)
+
+    with patch.object(comandos.ia, "sugerir_comando") as mock_ia, \
+         patch.object(comandos.cuidadores, "notificar_cuidadores", new=AsyncMock()):
+        resposta = _executar(comandos.processar_comando(usuario, "apliquei 8 unidades"))
+
+    mock_ia.assert_not_called()
+    assert "8" in resposta
+    registros = fake.table("registros_bolus").select("*").eq("usuario_id", usuario["id"]).execute().data
+    assert len(registros) == 1
+    assert registros[0]["dose_aplicada"] == 8.0
+
+
+def test_glicemia_com_contexto_nao_reconhecido_cai_pro_fallback_de_ia():
+    fake = FakeSupabase()
+    _ligar_supabase_glicemia(fake)
+    usuario = _criar_usuario(fake)
+    fake.table("perfil_glicemico").insert(
+        {"usuario_id": usuario["id"], "meta_glicemia": 120, "limite_baixo": 70, "limite_alto": 180, "fator_sensibilidade": 30}
+    ).execute()
+
+    with patch.object(comandos.ia, "sugerir_comando", new=AsyncMock(return_value=None)):
+        resposta = _executar(comandos.processar_comando(usuario, "glicemia 110 em jejum"))
+
+    assert "Não entendi" in resposta
+    assert fake.store.get("registros_glicemia", []) == []
     assert fake.store.get("registros_bolus", []) == []
 
 

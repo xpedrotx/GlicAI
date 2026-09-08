@@ -306,6 +306,15 @@ async def _excluir_conta(usuario: dict) -> str:
     )
 
 
+class _SintaxeNaoReconhecida(Exception):
+    """Levantada por um handler quando o primeiro token bate com um comando
+    conhecido (ex: "apliquei"), mas o resto da frase não bate com o formato
+    rígido esperado (ex: "apliquei 8 unidades" — "unidades" não é um
+    horário válido). Em vez de mostrar um erro técnico de sintaxe, cai pra
+    IA reinterpretar a frase inteira em linguagem natural — mais fácil pro
+    paciente que só queria dizer "apliquei 8 unidades de insulina"."""
+
+
 async def processar_comando(usuario: dict, mensagem: str) -> str:
     pendente = usuario.get("sugestao_pendente")
     if pendente:
@@ -321,52 +330,55 @@ async def processar_comando(usuario: dict, mensagem: str) -> str:
 
     comando = remover_acentos(partes[0].lower())
 
-    if comando in ("ajuda", "menu", "help"):
-        return _ajuda()
-    if comando in ("oi", "ola", "oii", "oie", "eae", "hey", "hello"):
-        return _saudacao(usuario)
-    if comando == "perfil":
-        return await _perfil(usuario)
-    if comando == "basal":
-        return await _basal(usuario)
-    if comando == "bolus":
-        return await _bolus(usuario, partes[1:])
-    if comando == "apliquei":
-        return await _apliquei(usuario, partes[1:])
-    if comando == "modificador":
-        return await _modificador(usuario, partes[1:])
-    if comando == "glicemia":
-        return await _glicemia(usuario, partes[1:])
-    if comando == "tratei":
-        return await _tratei(usuario)
-    if comando == "cuidador":
-        return await _cuidador(usuario, partes[1:])
-    if comando == "tempo_insulina_ativa":
-        return await _tempo_insulina_ativa(usuario, partes[1:])
-    if comando == "lembrete":
-        return await _lembrete(usuario, partes[1:])
-    if comando == "relatorio":
-        return await _relatorio(usuario, partes[1:])
-    if comando == "exportar":
-        return await _exportar(usuario, partes[1:])
-    if comando in ("hba1c", "gmi"):
-        return await _hba1c(usuario, partes[1:])
-    if comando == "editar":
-        return await _editar(usuario, partes[1:])
-    if comando in ("padroes", "padrao"):
-        return await _padroes(usuario, partes[1:])
-    if comando == "estoque":
-        return await _estoque(usuario, partes[1:])
-    if comando == "criar_senha":
-        return auth_web.gerar_codigo_login(usuario["id"])
-    if comando == "excluir_conta":
-        return await _pedir_confirmacao_exclusao(usuario)
-    if comando == "confirmar_exclusao_conta":
-        return await _excluir_conta(usuario)
+    try:
+        if comando in ("ajuda", "menu", "help"):
+            return _ajuda()
+        if comando in ("oi", "ola", "oii", "oie", "eae", "hey", "hello"):
+            return _saudacao(usuario)
+        if comando == "perfil":
+            return await _perfil(usuario)
+        if comando == "basal":
+            return await _basal(usuario)
+        if comando == "bolus":
+            return await _bolus(usuario, partes[1:])
+        if comando == "apliquei":
+            return await _apliquei(usuario, partes[1:])
+        if comando == "modificador":
+            return await _modificador(usuario, partes[1:])
+        if comando == "glicemia":
+            return await _glicemia(usuario, partes[1:])
+        if comando == "tratei":
+            return await _tratei(usuario)
+        if comando == "cuidador":
+            return await _cuidador(usuario, partes[1:])
+        if comando == "tempo_insulina_ativa":
+            return await _tempo_insulina_ativa(usuario, partes[1:])
+        if comando == "lembrete":
+            return await _lembrete(usuario, partes[1:])
+        if comando == "relatorio":
+            return await _relatorio(usuario, partes[1:])
+        if comando == "exportar":
+            return await _exportar(usuario, partes[1:])
+        if comando in ("hba1c", "gmi"):
+            return await _hba1c(usuario, partes[1:])
+        if comando == "editar":
+            return await _editar(usuario, partes[1:])
+        if comando in ("padroes", "padrao"):
+            return await _padroes(usuario, partes[1:])
+        if comando == "estoque":
+            return await _estoque(usuario, partes[1:])
+        if comando == "criar_senha":
+            return auth_web.gerar_codigo_login(usuario["id"])
+        if comando == "excluir_conta":
+            return await _pedir_confirmacao_exclusao(usuario)
+        if comando == "confirmar_exclusao_conta":
+            return await _excluir_conta(usuario)
 
-    # atalho: mandar só um número vale como registro de glicemia
-    if len(partes) == 1 and parse_numero(comando) is not None:
-        return await _glicemia(usuario, partes)
+        # atalho: mandar só um número vale como registro de glicemia
+        if len(partes) == 1 and parse_numero(comando) is not None:
+            return await _glicemia(usuario, partes)
+    except _SintaxeNaoReconhecida:
+        return await _tentar_sugestao_ia(usuario, mensagem)
 
     return await _tentar_sugestao_ia(usuario, mensagem)
 
@@ -377,16 +389,13 @@ async def _glicemia(usuario: dict, args: list[str]) -> str:
 
     valor = parse_numero(args[0])
     if valor is None or valor <= 0:
-        return "Não consegui entender esse valor, manda só o número. Tipo: *glicemia 110*"
+        raise _SintaxeNaoReconhecida()
 
     contexto = "outro"
     if len(args) > 1:
         contexto = _normalizar_contexto(" ".join(args[1:]))
         if contexto is None:
-            return (
-                "Não reconheci esse contexto. Use *jejum*, *pre_refeicao*, "
-                "*pos_prandial*, *correcao* ou *outro*. Tipo: *glicemia 110 jejum*"
-            )
+            raise _SintaxeNaoReconhecida()
 
     nome = usuario.get("nome") or "Ele(a)"
     label_contexto = _CONTEXTO_LABEL.get(contexto)
@@ -529,6 +538,12 @@ async def _bolus(usuario: dict, args: list[str]) -> str:
 
 _CONECTORES_HORARIO = ("as", "às", "hs")
 
+# Palavras que um paciente naturalmente adiciona depois da dose (ex:
+# "apliquei 8 unidades", "apliquei 8 unidades de insulina") e que não mudam
+# o sentido do comando — ignoradas antes de tentar interpretar o resto como
+# horário.
+_PALAVRAS_IGNORAVEIS_DOSE = ("unidade", "unidades", "u", "de", "insulina")
+
 
 async def _apliquei(usuario: dict, args: list[str]) -> str:
     if not args:
@@ -539,10 +554,17 @@ async def _apliquei(usuario: dict, args: list[str]) -> str:
 
     dose = parse_numero(args[0])
     if dose is None or dose < 0:
-        return "Não entendi essa dose, manda só o número. Tipo: *apliquei 4u*"
+        raise _SintaxeNaoReconhecida()
 
     tz = usuario.get("timezone") or "America/Sao_Paulo"
-    resto = [t for t in args[1:] if remover_acentos(t.lower()) not in _CONECTORES_HORARIO]
+    # Ignora palavras soltas comuns que não mudam o sentido (ex: "apliquei 8
+    # unidades", "apliquei 8 unidades de insulina") — só o que sobra depois
+    # disso é candidato a horário.
+    resto = [
+        t for t in args[1:]
+        if remover_acentos(t.lower()) not in _CONECTORES_HORARIO
+        and remover_acentos(t.lower()) not in _PALAVRAS_IGNORAVEIS_DOSE
+    ]
 
     # Retroativo: sem o horário real, o IOB contaria o decaimento a partir de agora.
     horario_aplicacao = None
@@ -550,7 +572,7 @@ async def _apliquei(usuario: dict, args: list[str]) -> str:
     if resto:
         hora = parse_hora(resto[0])
         if hora is None:
-            return "Não entendi o horário. Manda no formato HH:MM. Tipo: *apliquei 6u 12:20*"
+            raise _SintaxeNaoReconhecida()
         agora_local = agora_usuario(tz)
         candidato_local = agora_local.replace(hour=hora.hour, minute=hora.minute, second=0, microsecond=0)
         if candidato_local > agora_local:
