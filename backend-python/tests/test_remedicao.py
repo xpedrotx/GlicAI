@@ -11,20 +11,36 @@ def _executar(coro):
     return asyncio.run(coro)
 
 
-def test_agendar_cria_lembrete_15min_no_futuro():
+def test_agendar_hipoglicemia_cria_lembrete_15min_no_futuro():
     fake = FakeSupabase()
     remedicao.supabase = fake
     usuario_id = str(uuid.uuid4())
 
-    _executar(remedicao.agendar(usuario_id))
+    _executar(remedicao.agendar(usuario_id, "hipoglicemia"))
 
     linhas = fake.store["lembretes_remedicao"]
     assert len(linhas) == 1
     assert linhas[0]["usuario_id"] == usuario_id
     assert linhas[0]["enviado"] is False
+    assert linhas[0]["tipo"] == "hipoglicemia"
     disparar_em = datetime.fromisoformat(linhas[0]["disparar_em"])
     delta = disparar_em - datetime.now(timezone.utc)
     assert timedelta(minutes=14) < delta < timedelta(minutes=16)
+
+
+def test_agendar_hiperglicemia_cria_lembrete_60min_no_futuro():
+    fake = FakeSupabase()
+    remedicao.supabase = fake
+    usuario_id = str(uuid.uuid4())
+
+    _executar(remedicao.agendar(usuario_id, "hiperglicemia"))
+
+    linhas = fake.store["lembretes_remedicao"]
+    assert len(linhas) == 1
+    assert linhas[0]["tipo"] == "hiperglicemia"
+    disparar_em = datetime.fromisoformat(linhas[0]["disparar_em"])
+    delta = disparar_em - datetime.now(timezone.utc)
+    assert timedelta(minutes=59) < delta < timedelta(minutes=61)
 
 
 def test_verificar_pendentes_manda_e_marca_enviado_quando_vencido():
@@ -33,7 +49,7 @@ def test_verificar_pendentes_manda_e_marca_enviado_quando_vencido():
     usuario = fake.table("usuarios").insert({"telefone": "5545999999999@c.us", "nome": "Pedro"}).execute().data[0]
     vencido = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
     lembrete = fake.table("lembretes_remedicao").insert(
-        {"usuario_id": usuario["id"], "disparar_em": vencido, "enviado": False}
+        {"usuario_id": usuario["id"], "disparar_em": vencido, "enviado": False, "tipo": "hipoglicemia"}
     ).execute().data[0]
 
     with patch.object(remedicao, "enviar_mensagem", new=AsyncMock()) as mock_enviar:
@@ -45,13 +61,46 @@ def test_verificar_pendentes_manda_e_marca_enviado_quando_vencido():
     assert atualizado["enviado"] is True
 
 
+def test_verificar_pendentes_manda_mensagem_de_hiperglicemia_com_1_hora():
+    fake = FakeSupabase()
+    remedicao.supabase = fake
+    usuario = fake.table("usuarios").insert({"telefone": "5545999999999@c.us", "nome": "Pedro"}).execute().data[0]
+    vencido = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    fake.table("lembretes_remedicao").insert(
+        {"usuario_id": usuario["id"], "disparar_em": vencido, "enviado": False, "tipo": "hiperglicemia"}
+    ).execute()
+
+    with patch.object(remedicao, "enviar_mensagem", new=AsyncMock()) as mock_enviar:
+        _executar(remedicao.verificar_pendentes())
+
+    mock_enviar.assert_awaited_once()
+    assert "1 hora" in mock_enviar.await_args.args[1]
+
+
+def test_verificar_pendentes_lembrete_antigo_sem_tipo_assume_hipoglicemia():
+    """Linhas criadas antes da migration 015 (campo "tipo") não têm esse
+    valor — só existiam pra hipoglicemia até então."""
+    fake = FakeSupabase()
+    remedicao.supabase = fake
+    usuario = fake.table("usuarios").insert({"telefone": "5545999999999@c.us", "nome": "Pedro"}).execute().data[0]
+    vencido = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    fake.store["lembretes_remedicao"] = [
+        {"id": str(uuid.uuid4()), "usuario_id": usuario["id"], "disparar_em": vencido, "enviado": False}
+    ]
+
+    with patch.object(remedicao, "enviar_mensagem", new=AsyncMock()) as mock_enviar:
+        _executar(remedicao.verificar_pendentes())
+
+    assert "15 minutos" in mock_enviar.await_args.args[1]
+
+
 def test_verificar_pendentes_ignora_lembrete_ainda_nao_vencido():
     fake = FakeSupabase()
     remedicao.supabase = fake
     usuario = fake.table("usuarios").insert({"telefone": "5545999999999@c.us", "nome": "Pedro"}).execute().data[0]
     no_futuro = (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
     fake.table("lembretes_remedicao").insert(
-        {"usuario_id": usuario["id"], "disparar_em": no_futuro, "enviado": False}
+        {"usuario_id": usuario["id"], "disparar_em": no_futuro, "enviado": False, "tipo": "hipoglicemia"}
     ).execute()
 
     with patch.object(remedicao, "enviar_mensagem", new=AsyncMock()) as mock_enviar:
@@ -66,7 +115,7 @@ def test_verificar_pendentes_ignora_lembrete_ja_enviado():
     usuario = fake.table("usuarios").insert({"telefone": "5545999999999@c.us", "nome": "Pedro"}).execute().data[0]
     vencido = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
     fake.table("lembretes_remedicao").insert(
-        {"usuario_id": usuario["id"], "disparar_em": vencido, "enviado": True}
+        {"usuario_id": usuario["id"], "disparar_em": vencido, "enviado": True, "tipo": "hipoglicemia"}
     ).execute()
 
     with patch.object(remedicao, "enviar_mensagem", new=AsyncMock()) as mock_enviar:

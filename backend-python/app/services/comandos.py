@@ -448,7 +448,7 @@ async def _glicemia(usuario: dict, args: list[str]) -> str:
     if alerta and alerta["tipo"] == "hipoglicemia":
         if alerta["novo"]:
             resposta += "\n\n" + await _bloco_hipoglicemia(valor, alerta["limite"])
-            await remedicao.agendar(usuario["id"])
+            await remedicao.agendar(usuario["id"], "hipoglicemia")
         else:
             # Dentro da janela de throttle (15min) — já mostrou o cartão
             # completo com dicas na leitura anterior, não repete de novo.
@@ -456,6 +456,11 @@ async def _glicemia(usuario: dict, args: list[str]) -> str:
         await confirmacoes.criar_confirmacao(usuario["id"], "hipoglicemia", valor)
         aguardando_confirmacao = True
     else:
+        if alerta and alerta["tipo"] == "hiperglicemia" and alerta["novo"]:
+            # Mesma ideia da hipoglicemia: agenda um lembrete de remedir mais
+            # à frente (60min, não 15 — ver remedicao.py) pra ver a
+            # tendência, independente de ter sugerido dose de correção.
+            await remedicao.agendar(usuario["id"], "hiperglicemia")
         # Sugere correção sempre que estiver acima da meta, não só acima do
         # limite alto/crítico.
         correcao = await calcular_correcao(usuario["id"], valor)

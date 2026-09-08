@@ -220,6 +220,13 @@ def test_glicemia_hiperglicemia_mostra_cartao_com_dicas_na_primeira_leitura():
     assert "apliquei" in resposta.lower()
     dicas_mock.assert_awaited_once_with("hiperglicemia", 201)
 
+    lembretes = fake.table("lembretes_remedicao").select("*").eq("usuario_id", usuario["id"]).execute().data
+    assert len(lembretes) == 1
+    assert lembretes[0]["tipo"] == "hiperglicemia"
+    disparar_em = datetime.fromisoformat(lembretes[0]["disparar_em"])
+    delta = disparar_em - datetime.now(timezone.utc)
+    assert timedelta(minutes=59) < delta < timedelta(minutes=61)
+
 
 def test_glicemia_hiperglicemia_repetida_na_janela_de_throttle_nao_repete_cartao():
     """
