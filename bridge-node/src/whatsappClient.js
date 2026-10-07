@@ -59,6 +59,11 @@ client.on('message', async (message) => {
   // segurança, mas nem vale gastar uma chamada HTTP.
   if (message.from === 'status@broadcast') return;
 
+  // Mostra "digitando..." enquanto o backend processa — some sozinho quando a
+  // resposta chega (ou é limpo no finally se não houver resposta). Sem
+  // espera artificial: o indicador só cobre o tempo real de processamento.
+  await _enviarEstadoChat('typing', message.from);
+
   try {
     await axios.post(
       PYTHON_WEBHOOK_URL,
@@ -74,8 +79,27 @@ client.on('message', async (message) => {
     );
   } catch (err) {
     console.error('[glicai-bridge] Erro ao processar mensagem recebida:', err.message);
+  } finally {
+    await _enviarEstadoChat('stop', message.from);
   }
 });
+
+// Chama direto a função interna que o whatsapp-web.js usa pro "digitando",
+// em vez de chat.sendStateTyping(): esse caminho exige getChatById, que
+// quebra pra contas @lid (bug ainda aberto na lib, ver
+// https://github.com/pedroslopez/whatsapp-web.js/issues/3834). O envio do
+// estado em si só precisa do ID. Falha aqui nunca pode afetar a mensagem.
+async function _enviarEstadoChat(estado, telefone) {
+  try {
+    await client.pupPage.evaluate(
+      (e, id) => window.WWebJS.sendChatstate(e, id),
+      estado,
+      telefone
+    );
+  } catch (err) {
+    console.warn(`[glicai-bridge] Falha ao enviar estado "${estado}":`, (err && err.message) || err);
+  }
+}
 
 // Retry curto pra um bug conhecido e ainda sem correção do whatsapp-web.js
 // (WhatsApp Web removeu uma função interna que a lib usa — ver
