@@ -758,7 +758,8 @@ def test_apliquei_desconta_estoque_de_insulina_e_avisa_quando_baixo():
     with patch.object(comandos.cuidadores, "notificar_cuidadores", new=AsyncMock()):
         resposta = _executar(comandos.processar_comando(usuario, "apliquei 4"))
 
-    assert "estoque de insulina baixo" in resposta.lower()
+    assert "sua insulina está acabando" in resposta.lower()
+    assert "reabastecer" not in resposta  # nada de comando técnico no aviso
     linha = _executar(estoque.buscar(usuario["id"], "insulina"))
     assert linha["quantidade_atual"] == 6
 

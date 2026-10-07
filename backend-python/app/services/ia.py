@@ -39,6 +39,7 @@ _COMANDOS_DISPONIVEIS = """
 - padroes [dias] — detecta padrões de glicemia por dia da semana/período
 - cuidador <convidar|listar|remover> [nome] — gerencia quem acompanha o paciente
 - estoque — mostra o estoque de insulina e fitas de dextro
+- estoque reabastecer <insulina|fita> [quantidade] — registra que o paciente repôs insulina ou fitas de dextro. Ex: "estoque reabastecer fita"
 - criar_senha — gera um código de acesso ao site de acompanhamento
 - apagar_glicemia [valor] — apaga uma glicemia registrada por engano: sem valor, a última; com valor, a mais recente com esse valor. Ex: "apagar_glicemia 6"
 - apagar_dose [dose] — apaga uma dose de insulina registrada por engano: sem valor, a última; com valor, a mais recente com essa dose. Ex: "apagar_dose 8"

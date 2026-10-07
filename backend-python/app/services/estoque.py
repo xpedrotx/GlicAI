@@ -85,10 +85,14 @@ async def consumir(usuario_id: str, tipo: str, quantidade: float) -> str | None:
     if nova_quantidade > linha["limite_alerta"]:
         return None
 
-    label = TIPOS.get(tipo, tipo).lower()
+    if tipo == "insulina":
+        return (
+            f"\n\n⚠️ Sua insulina está acabando — restam *{nova_quantidade:.0f}U*. "
+            'Quando repor, é só me avisar (ex: _"repus a insulina"_).'
+        )
     return (
-        f"\n\n⚠️ Estoque de {label} baixo: restam *{nova_quantidade:.0f}*. "
-        f"Considere repor (*estoque reabastecer {tipo}*)."
+        f"\n\n⚠️ Suas fitas de dextro estão acabando — restam *{nova_quantidade:.0f}*. "
+        'Quando repor, é só me avisar (ex: _"repus as fitas"_).'
     )
 
 
