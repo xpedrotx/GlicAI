@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
-from app.services import alertas, auth_web, bolus, comandos, confirmacoes, estoque, remedicao
+from app.services import alertas, auth_web, bolus, comandos, confirmacoes, correcao, estoque, remedicao
 from tests.fake_supabase import FakeSupabase
 
 
@@ -903,3 +903,123 @@ def test_descrever_comando_traduz_pra_portugues_sem_underscore():
     assert "4 horas" in comandos._descrever_comando("tempo_insulina_ativa 4")
     assert "40" in comandos._descrever_comando("bolus 40 130") and "130" in comandos._descrever_comando("bolus 40 130")
     assert "4.5" in comandos._descrever_comando("apliquei 4.5")
+
+
+# --------------------------------------------------------------------------
+# apagar/corrigir registro lançado errado — além de apagar a linha, desfaz
+# confirmação pendente (escalonamento pros cuidadores), alerta e lembrete
+# de remedição disparados pela leitura errada.
+# --------------------------------------------------------------------------
+
+def _ligar_supabase_correcao(fake: FakeSupabase):
+    _ligar_supabase_glicemia(fake)
+    correcao.supabase = fake
+
+
+def _perfil_padrao(fake, usuario):
+    fake.table("perfil_glicemico").insert(
+        {"usuario_id": usuario["id"], "meta_glicemia": 120, "limite_baixo": 70, "limite_alto": 180, "fator_sensibilidade": 30}
+    ).execute()
+
+
+def test_apagar_glicemia_pede_confirmacao_mostrando_o_valor():
+    fake = FakeSupabase()
+    _ligar_supabase_correcao(fake)
+    usuario = _criar_usuario(fake)
+    fake.table("registros_glicemia").insert({"usuario_id": usuario["id"], "valor": 6}).execute()
+
+    resposta = _executar(comandos.processar_comando(usuario, "apagar glicemia"))
+
+    assert "*6 mg/dL*" in resposta
+    assert "sim" in resposta.lower()
+    assert len(fake.store["registros_glicemia"]) == 1  # ainda não apagou
+
+
+def test_apagar_glicemia_confirmado_desfaz_alerta_confirmacao_e_lembrete():
+    fake = FakeSupabase()
+    _ligar_supabase_correcao(fake)
+    usuario = _criar_usuario(fake)
+    _perfil_padrao(fake, usuario)
+
+    with _mockar_dicas_ia(), patch.object(comandos.cuidadores, "notificar_cuidadores", new=AsyncMock()):
+        _executar(comandos.processar_comando(usuario, "glicemia 60"))
+    assert fake.store["lembretes_remedicao"]
+    assert fake.store["confirmacoes_glicemia"][0]["confirmado_em"] is None
+
+    _executar(comandos.processar_comando(usuario, "apagar glicemia"))
+    usuario = fake.table("usuarios").select("*").eq("id", usuario["id"]).execute().data[0]
+    with patch.object(correcao.cuidadores, "notificar_cuidadores", new=AsyncMock()) as mock_notificar:
+        resposta = _executar(comandos.processar_comando(usuario, "sim"))
+
+    assert "Apaguei a glicemia de *60 mg/dL*" in resposta
+    assert fake.store["registros_glicemia"] == []
+    assert fake.store["lembretes_remedicao"] == []
+    assert fake.store["alertas_enviados"] == []
+    assert fake.store["confirmacoes_glicemia"][0]["confirmado_em"] is not None  # escalonamento cancelado
+    # cuidadores nunca souberam (estava pendente, sem escalonar) — não manda correção
+    mock_notificar.assert_not_awaited()
+
+
+def test_apagar_glicemia_ja_avisada_manda_correcao_pros_cuidadores():
+    fake = FakeSupabase()
+    _ligar_supabase_correcao(fake)
+    usuario = _criar_usuario(fake)
+    registro = fake.table("registros_glicemia").insert({"usuario_id": usuario["id"], "valor": 6}).execute().data[0]
+
+    with patch.object(correcao.cuidadores, "notificar_cuidadores", new=AsyncMock()) as mock_notificar:
+        _executar(comandos.processar_comando(usuario, f"confirmar_apagar_glicemia {registro['id']}"))
+
+    mock_notificar.assert_awaited_once()
+    assert "engano" in mock_notificar.await_args.args[1]
+
+
+def test_corrigir_glicemia_troca_o_valor():
+    fake = FakeSupabase()
+    _ligar_supabase_correcao(fake)
+    usuario = _criar_usuario(fake)
+    _perfil_padrao(fake, usuario)
+    fake.table("registros_glicemia").insert({"usuario_id": usuario["id"], "valor": 6}).execute()
+
+    with patch.object(correcao.cuidadores, "notificar_cuidadores", new=AsyncMock()), \
+         patch.object(comandos.cuidadores, "notificar_cuidadores", new=AsyncMock()):
+        resposta = _executar(comandos.processar_comando(usuario, "corrigir glicemia 116"))
+
+    assert "Troquei a glicemia de *6*" in resposta
+    valores = [r["valor"] for r in fake.store["registros_glicemia"]]
+    assert valores == [116]
+
+
+def test_apagar_dose_avulsa_remove_e_devolve_insulina_ao_estoque():
+    fake = FakeSupabase()
+    _ligar_supabase_correcao(fake)
+    usuario = _criar_usuario(fake)
+    fake.table("estoque_insumos").insert(
+        {"usuario_id": usuario["id"], "tipo": "insulina", "quantidade_atual": 292, "quantidade_por_reposicao": 300, "limite_alerta": 30}
+    ).execute()
+    registro = fake.table("registros_bolus").insert(
+        {"usuario_id": usuario["id"], "carboidratos_g": 0, "glicemia_referencia": None, "dose_calculada": 8,
+         "dose_aplicada": 8, "horario_aplicacao": datetime.now(timezone.utc).isoformat()}
+    ).execute().data[0]
+
+    resposta = _executar(comandos.processar_comando(usuario, "apagar dose"))
+    assert "*8.0U*" in resposta
+
+    usuario = fake.table("usuarios").select("*").eq("id", usuario["id"]).execute().data[0]
+    with patch.object(correcao.cuidadores, "notificar_cuidadores", new=AsyncMock()):
+        _executar(comandos.processar_comando(usuario, "sim"))
+
+    assert all(r["id"] != registro["id"] for r in fake.store["registros_bolus"])
+    assert fake.store["estoque_insumos"][0]["quantidade_atual"] == 300
+
+
+def test_apagar_glicemia_via_ia_nao_pede_confirmacao_duas_vezes():
+    fake = FakeSupabase()
+    _ligar_supabase_correcao(fake)
+    usuario = _criar_usuario(fake)
+    fake.table("registros_glicemia").insert({"usuario_id": usuario["id"], "valor": 6}).execute()
+
+    sugestao = AsyncMock(return_value={"comando": "apagar_glicemia", "confianca": "alta"})
+    with patch.object(comandos.ia, "sugerir_comando", new=sugestao):
+        resposta = _executar(comandos.processar_comando(usuario, "mandei a glicemia errada"))
+
+    assert "Apagar a glicemia de *6 mg/dL*" in resposta

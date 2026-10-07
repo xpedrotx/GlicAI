@@ -90,3 +90,13 @@ async def consumir(usuario_id: str, tipo: str, quantidade: float) -> str | None:
         f"\n\n⚠️ Estoque de {label} baixo: restam *{nova_quantidade:.0f}*. "
         f"Considere repor (*estoque reabastecer {tipo}*)."
     )
+
+
+async def devolver(usuario_id: str, tipo: str, quantidade: float) -> None:
+    """Desfaz um `consumir` (ex: dose apagada por engano) — soma de volta ao
+    estoque configurado. Não faz nada se esse tipo não estiver configurado."""
+    linha = await buscar(usuario_id, tipo)
+    if linha is None:
+        return
+    nova = float(linha["quantidade_atual"]) + quantidade
+    supabase.table("estoque_insumos").update({"quantidade_atual": nova}).eq("id", linha["id"]).execute()

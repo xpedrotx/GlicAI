@@ -275,7 +275,11 @@ def test_padroes_detectados_traz_dia_semana_label():
     ).execute()
     # terça-feira (weekday=1) de manhã, 3 medições altas
     from datetime import datetime as dt
-    terca_manha = dt(2026, 8, 4, 8, 0, tzinfo=timezone.utc)  # 04/08/2026 é terça
+    from datetime import timedelta as td
+    # terça-feira recente (data fixa saía da janela de 60 dias com o tempo)
+    hoje = dt.now(timezone.utc)
+    terca = hoje - td(days=(hoje.weekday() - 1) % 7 + 7)
+    terca_manha = terca.replace(hour=8, minute=0, second=0, microsecond=0)
     for _ in range(3):
         fake.table("registros_glicemia").insert(
             {"usuario_id": usuario_id, "valor": 220, "horario": terca_manha.isoformat()}

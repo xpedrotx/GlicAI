@@ -40,6 +40,9 @@ _COMANDOS_DISPONIVEIS = """
 - cuidador <convidar|listar|remover> [nome] — gerencia quem acompanha o paciente
 - estoque — mostra o estoque de insulina e fitas de dextro
 - criar_senha — gera um código de acesso ao site de acompanhamento
+- apagar_glicemia — apaga a última glicemia registrada (digitou errado)
+- apagar_dose — apaga a última dose de insulina registrada (digitou errado)
+- corrigir_glicemia <valor> [jejum|pre_refeicao|pos_prandial|correcao] — troca a última glicemia pelo valor certo. Ex: "corrigir_glicemia 116"
 """.strip()
 
 _SISTEMA = (

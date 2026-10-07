@@ -1,7 +1,8 @@
 """Roteador de comandos de texto usado depois que o cadastro está completo."""
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
-from app.services import auth_web, confirmacoes, cuidadores, estoque, ia, remedicao
+from app.services import auth_web, confirmacoes, correcao, cuidadores, estoque, ia, remedicao
 from app.services.alertas import checar_alerta_glicemia
 from app.services.bolus import (
     calcular_correcao,
@@ -118,6 +119,17 @@ _ALIASES_COMANDO_MULTIPALAVRA = {
     "excluir minha conta": "excluir_conta",
     "apagar meus dados": "excluir_conta",
     "apagar minha conta": "excluir_conta",
+    "apagar glicemia": "apagar_glicemia",
+    "apagar ultima glicemia": "apagar_glicemia",
+    "excluir glicemia": "apagar_glicemia",
+    "excluir ultima glicemia": "apagar_glicemia",
+    "desfazer glicemia": "apagar_glicemia",
+    "apagar dose": "apagar_dose",
+    "apagar ultima dose": "apagar_dose",
+    "excluir dose": "apagar_dose",
+    "excluir ultima dose": "apagar_dose",
+    "desfazer dose": "apagar_dose",
+    "corrigir glicemia": "corrigir_glicemia",
 }
 
 
@@ -190,6 +202,8 @@ _COMANDOS_SEGUROS_SEM_SUBACAO = {
     "ajuda", "menu", "help", "oi", "ola", "oii", "oie", "eae", "hey", "hello",
     "perfil", "basal", "relatorio", "exportar", "hba1c", "gmi", "padroes", "padrao",
     "criar_senha",
+    # só mostram o que seria apagado e pedem *sim/não* por conta própria
+    "apagar_glicemia", "apagar_dose", "desfazer",
 }
 
 
@@ -230,6 +244,8 @@ def _descrever_comando(comando_texto: str) -> str:
         return f"registrar que você aplicou {args[0]} de insulina"
     if comando == "tratei":
         return "confirmar que você tratou a hipoglicemia"
+    if comando == "corrigir_glicemia" and args:
+        return f"apagar sua última glicemia e registrar {args[0]} no lugar"
     if comando == "editar" and len(args) >= 2:
         return f"mudar seu(sua) {args[0]} pra {args[1]}"
     if comando == "modificador" and len(args) >= 2:
@@ -271,6 +287,84 @@ async def _tentar_sugestao_ia(usuario: dict, mensagem: str) -> str:
     return (
         f"Você quis dizer: *{_descrever_comando(comando_sugerido)}*?\n"
         "Responde *sim* pra confirmar, ou *não* pra cancelar."
+    )
+
+
+def _data_hora_local(horario_iso: str, usuario: dict) -> str:
+    tz = ZoneInfo(usuario.get("timezone") or "America/Sao_Paulo")
+    return datetime.fromisoformat(horario_iso).astimezone(tz).strftime("%d/%m às %H:%M")
+
+
+def _guardar_confirmacao_pendente(usuario: dict, comando: str) -> None:
+    supabase.table("usuarios").update(
+        {"sugestao_pendente": {"comando": comando, "criado_em": datetime.now(timezone.utc).isoformat()}}
+    ).eq("id", usuario["id"]).execute()
+
+
+async def _pedir_confirmacao_apagar_glicemia(usuario: dict) -> str:
+    ultima = await correcao.ultima_glicemia(usuario["id"])
+    if ultima is None:
+        return "Você ainda não tem nenhuma glicemia registrada."
+    _guardar_confirmacao_pendente(usuario, f"confirmar_apagar_glicemia {ultima['id']}")
+    return (
+        f"Apagar a glicemia de *{ultima['valor']} mg/dL* "
+        f"({_data_hora_local(ultima['horario'], usuario)})?\n"
+        "Responde *sim* pra apagar, ou *não* pra manter."
+    )
+
+
+async def _apagar_glicemia(usuario: dict, registro_id: str) -> str:
+    apagado = await correcao.apagar_glicemia(usuario, registro_id)
+    if apagado is None:
+        return "Não achei mais esse registro — talvez já tenha sido apagado."
+    return (
+        f"🗑️ Apaguei a glicemia de *{apagado['valor']} mg/dL*. "
+        "Os avisos e lembretes dessa leitura também foram cancelados.\n\n"
+        "Pra registrar o valor certo, é só mandar de novo (ex: *glicemia 110*)."
+    )
+
+
+async def _corrigir_glicemia(usuario: dict, args: list[str]) -> str:
+    """Atalho: apaga a última leitura e já registra o valor certo no lugar."""
+    valor = parse_numero(args[0]) if args else None
+    if valor is None or valor <= 0:
+        raise _SintaxeNaoReconhecida()
+    if len(args) > 1 and _normalizar_contexto(" ".join(args[1:])) is None:
+        raise _SintaxeNaoReconhecida()
+
+    ultima = await correcao.ultima_glicemia(usuario["id"])
+    if ultima is None:
+        return "Não achei nenhuma glicemia pra corrigir. Pra registrar uma nova, manda *glicemia <valor>*."
+
+    apagado = await correcao.apagar_glicemia(usuario, ultima["id"])
+    # a fita da leitura errada já foi gasta — a nova leitura vai descontar
+    # outra, então devolve a primeira pra não contar em dobro
+    await estoque.devolver(usuario["id"], "fita_dextro", 1)
+    nova = await _glicemia(usuario, args)
+    return f"✏️ Troquei a glicemia de *{apagado['valor']}* pelo valor novo.\n\n" + nova
+
+
+async def _pedir_confirmacao_apagar_dose(usuario: dict) -> str:
+    ultima = await correcao.ultima_dose(usuario["id"])
+    if ultima is None:
+        return "Você ainda não tem nenhuma dose registrada."
+    _guardar_confirmacao_pendente(usuario, f"confirmar_apagar_dose {ultima['id']}")
+    momento = ultima.get("horario_aplicacao") or ultima["horario"]
+    return (
+        f"Apagar a dose de *{float(ultima['dose_aplicada']):.1f}U* "
+        f"({_data_hora_local(momento, usuario)})?\n"
+        "Responde *sim* pra apagar, ou *não* pra manter."
+    )
+
+
+async def _apagar_dose(usuario: dict, registro_id: str) -> str:
+    apagado = await correcao.apagar_dose(usuario, registro_id)
+    if apagado is None:
+        return "Não achei mais essa dose — talvez já tenha sido apagada."
+    return (
+        f"🗑️ Apaguei a dose de *{float(apagado['dose_aplicada']):.1f}U*. "
+        "O cálculo de insulina ativa já considera isso.\n\n"
+        "Pra registrar a dose certa, manda de novo (ex: *apliquei 4u*)."
     )
 
 
@@ -369,6 +463,18 @@ async def processar_comando(usuario: dict, mensagem: str) -> str:
             return await _estoque(usuario, partes[1:])
         if comando == "criar_senha":
             return auth_web.gerar_codigo_login(usuario["id"])
+        if comando == "apagar_glicemia":
+            return await _pedir_confirmacao_apagar_glicemia(usuario)
+        if comando == "apagar_dose":
+            return await _pedir_confirmacao_apagar_dose(usuario)
+        if comando == "desfazer":
+            return "O que você quer apagar? Manda *apagar glicemia* ou *apagar dose* (eu apago o último registro)."
+        if comando == "corrigir_glicemia":
+            return await _corrigir_glicemia(usuario, partes[1:])
+        if comando == "confirmar_apagar_glicemia" and len(partes) > 1:
+            return await _apagar_glicemia(usuario, partes[1])
+        if comando == "confirmar_apagar_dose" and len(partes) > 1:
+            return await _apagar_dose(usuario, partes[1])
         if comando == "excluir_conta":
             return await _pedir_confirmacao_exclusao(usuario)
         if comando == "confirmar_exclusao_conta":
@@ -1131,6 +1237,8 @@ def _ajuda() -> str:
         "insulina 300* ou *estoque configurar fita 50*)\n\n"
         "🔑 *criar senha* — gera um código pra você acessar o site de acompanhamento "
         "(glicia.pedrotx.com.br) com CPF e senha\n"
+        "✏️ *apagar glicemia* / *apagar dose* — apaga o último registro lançado errado "
+        "(ou *corrigir glicemia 116* pra já trocar pelo valor certo)\n"
         "🗑️ *excluir conta* — apaga permanentemente todos os seus dados (pede confirmação antes)\n\n"
         "👨‍👩‍👧 *Quem acompanha sua glicemia*\n"
         "Pra convidar alguém (esposa, mãe etc): manda *cuidador convidar*, eu te dou um "
