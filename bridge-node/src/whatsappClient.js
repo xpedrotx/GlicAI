@@ -62,6 +62,7 @@ client.on('message', async (message) => {
   // Mostra "digitando..." enquanto o backend processa — some sozinho quando a
   // resposta chega (ou é limpo no finally se não houver resposta). Sem
   // espera artificial: o indicador só cobre o tempo real de processamento.
+  _conversasEmProcessamento.add(message.from);
   await _enviarEstadoChat('typing', message.from);
 
   try {
@@ -80,9 +81,30 @@ client.on('message', async (message) => {
   } catch (err) {
     console.error('[glicai-bridge] Erro ao processar mensagem recebida:', err.message);
   } finally {
+    _conversasEmProcessamento.delete(message.from);
     await _enviarEstadoChat('stop', message.from);
   }
 });
+
+// Conversas com uma mensagem do paciente sendo processada agora — a resposta
+// a elas já teve "digitando" durante o processamento real, então não ganha
+// espera extra (ver _digitarAntesDeEnviar).
+const _conversasEmProcessamento = new Set();
+
+const DIGITANDO_PROATIVO_MIN_MS = 1000;
+const DIGITANDO_PROATIVO_MAX_MS = 2000;
+
+// Mostra "digitando..." antes de toda mensagem que o bot manda. Resposta a
+// uma mensagem do paciente: só reforça o indicador, sem esperar (o tempo de
+// processamento já cobriu isso). Mensagem por conta própria (lembrete,
+// aviso pra cuidador, relatório): não tem processamento nenhum, então espera
+// 1-2s pra o indicador chegar a aparecer no celular de quem recebe.
+async function _digitarAntesDeEnviar(telefone) {
+  await _enviarEstadoChat('typing', telefone);
+  if (_conversasEmProcessamento.has(telefone)) return;
+  const esperaMs = DIGITANDO_PROATIVO_MIN_MS + Math.random() * (DIGITANDO_PROATIVO_MAX_MS - DIGITANDO_PROATIVO_MIN_MS);
+  await new Promise((resolve) => setTimeout(resolve, esperaMs));
+}
 
 // Chama direto a função interna que o whatsapp-web.js usa pro "digitando",
 // em vez de chat.sendStateTyping(): esse caminho exige getChatById, que
@@ -125,11 +147,13 @@ async function _enviarComRetry(fn) {
 // "telefone" é sempre o JID completo original (@c.us ou @lid) — nunca reconstruído
 // a partir só do número, contas @lid não são endereçáveis via @c.us (e vice-versa).
 async function enviarMensagem(telefone, texto) {
+  await _digitarAntesDeEnviar(telefone);
   await _enviarComRetry(() => client.sendMessage(telefone, texto));
 }
 
 // Usado pelo backend Python pra mandar arquivos (ex: PDF de exportação).
 async function enviarArquivo(telefone, nomeArquivo, mimetype, conteudoBase64) {
+  await _digitarAntesDeEnviar(telefone);
   const media = new MessageMedia(mimetype, conteudoBase64, nomeArquivo);
   await _enviarComRetry(() => client.sendMessage(telefone, media, { sendMediaAsDocument: true }));
 }
