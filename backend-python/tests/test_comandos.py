@@ -1023,3 +1023,36 @@ def test_apagar_glicemia_via_ia_nao_pede_confirmacao_duas_vezes():
         resposta = _executar(comandos.processar_comando(usuario, "mandei a glicemia errada"))
 
     assert "Apagar a glicemia de *6 mg/dL*" in resposta
+
+
+def test_apagar_glicemia_com_valor_acha_leitura_antiga():
+    fake = FakeSupabase()
+    _ligar_supabase_correcao(fake)
+    usuario = _criar_usuario(fake)
+    agora = datetime.now(timezone.utc)
+    errada = fake.table("registros_glicemia").insert(
+        {"usuario_id": usuario["id"], "valor": 6, "horario": (agora - timedelta(hours=2)).isoformat()}
+    ).execute().data[0]
+    for i, v in enumerate((140, 160)):
+        fake.table("registros_glicemia").insert(
+            {"usuario_id": usuario["id"], "valor": v, "horario": (agora - timedelta(minutes=30 - i)).isoformat()}
+        ).execute()
+
+    resposta = _executar(comandos.processar_comando(usuario, "apagar glicemia 6"))
+    assert "*6 mg/dL*" in resposta
+
+    usuario = fake.table("usuarios").select("*").eq("id", usuario["id"]).execute().data[0]
+    assert usuario["sugestao_pendente"]["comando"] == f"confirmar_apagar_glicemia {errada['id']}"
+    with patch.object(correcao.cuidadores, "notificar_cuidadores", new=AsyncMock()):
+        _executar(comandos.processar_comando(usuario, "sim"))
+    assert sorted(r["valor"] for r in fake.store["registros_glicemia"]) == [140, 160]
+
+
+def test_apagar_glicemia_com_valor_inexistente_avisa():
+    fake = FakeSupabase()
+    _ligar_supabase_correcao(fake)
+    usuario = _criar_usuario(fake)
+    fake.table("registros_glicemia").insert({"usuario_id": usuario["id"], "valor": 140}).execute()
+
+    resposta = _executar(comandos.processar_comando(usuario, "apagar glicemia 6"))
+    assert "Não achei nenhuma glicemia de *6 mg/dL*" in resposta

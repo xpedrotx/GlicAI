@@ -11,11 +11,14 @@ from app.services import cuidadores, estoque
 from app.services.supabase_client import supabase
 
 
-async def ultima_glicemia(usuario_id: str) -> dict | None:
+async def ultima_glicemia(usuario_id: str, valor: float | None = None) -> dict | None:
+    """A leitura mais recente — ou, com `valor`, a mais recente com esse valor
+    (pra apagar uma errada que já não é a última, ex: "apagar glicemia 6")."""
+    consulta = supabase.table("registros_glicemia").select("*").eq("usuario_id", usuario_id)
+    if valor is not None:
+        consulta = consulta.eq("valor", int(valor))
     linhas = (
-        supabase.table("registros_glicemia")
-        .select("*")
-        .eq("usuario_id", usuario_id)
+        consulta
         .order("horario", desc=True)
         .limit(1)
         .execute()
@@ -24,9 +27,12 @@ async def ultima_glicemia(usuario_id: str) -> dict | None:
     return linhas[0] if linhas else None
 
 
-async def ultima_dose(usuario_id: str) -> dict | None:
+async def ultima_dose(usuario_id: str, dose: float | None = None) -> dict | None:
     linhas = supabase.table("registros_bolus").select("*").eq("usuario_id", usuario_id).execute().data
-    aplicadas = [r for r in linhas if r.get("dose_aplicada") is not None]
+    aplicadas = [
+        r for r in linhas
+        if r.get("dose_aplicada") is not None and (dose is None or abs(float(r["dose_aplicada"]) - dose) < 0.05)
+    ]
     if not aplicadas:
         return None
     return max(aplicadas, key=lambda r: r.get("horario_aplicacao") or r["horario"])

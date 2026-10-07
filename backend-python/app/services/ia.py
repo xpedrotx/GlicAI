@@ -40,8 +40,8 @@ _COMANDOS_DISPONIVEIS = """
 - cuidador <convidar|listar|remover> [nome] — gerencia quem acompanha o paciente
 - estoque — mostra o estoque de insulina e fitas de dextro
 - criar_senha — gera um código de acesso ao site de acompanhamento
-- apagar_glicemia — apaga a última glicemia registrada (digitou errado)
-- apagar_dose — apaga a última dose de insulina registrada (digitou errado)
+- apagar_glicemia [valor] — apaga uma glicemia registrada por engano: sem valor, a última; com valor, a mais recente com esse valor. Ex: "apagar_glicemia 6"
+- apagar_dose [dose] — apaga uma dose de insulina registrada por engano: sem valor, a última; com valor, a mais recente com essa dose. Ex: "apagar_dose 8"
 - corrigir_glicemia <valor> [jejum|pre_refeicao|pos_prandial|correcao] — troca a última glicemia pelo valor certo. Ex: "corrigir_glicemia 116"
 """.strip()
 

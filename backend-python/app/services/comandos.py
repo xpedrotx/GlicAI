@@ -301,9 +301,23 @@ def _guardar_confirmacao_pendente(usuario: dict, comando: str) -> None:
     ).eq("id", usuario["id"]).execute()
 
 
-async def _pedir_confirmacao_apagar_glicemia(usuario: dict) -> str:
-    ultima = await correcao.ultima_glicemia(usuario["id"])
+def _valor_opcional(args: list[str]) -> float | None:
+    """Valor opcional depois de "apagar glicemia/dose" (ex: "apagar glicemia 6",
+    "apagar dose 8u") — pra achar um registro que já não é o último."""
+    if not args:
+        return None
+    valor = parse_numero(args[0])
+    if valor is None or valor <= 0:
+        raise _SintaxeNaoReconhecida()
+    return valor
+
+
+async def _pedir_confirmacao_apagar_glicemia(usuario: dict, args: list[str]) -> str:
+    valor = _valor_opcional(args)
+    ultima = await correcao.ultima_glicemia(usuario["id"], valor)
     if ultima is None:
+        if valor is not None:
+            return f"Não achei nenhuma glicemia de *{valor:.0f} mg/dL* registrada."
         return "Você ainda não tem nenhuma glicemia registrada."
     _guardar_confirmacao_pendente(usuario, f"confirmar_apagar_glicemia {ultima['id']}")
     return (
@@ -344,9 +358,12 @@ async def _corrigir_glicemia(usuario: dict, args: list[str]) -> str:
     return f"✏️ Troquei a glicemia de *{apagado['valor']}* pelo valor novo.\n\n" + nova
 
 
-async def _pedir_confirmacao_apagar_dose(usuario: dict) -> str:
-    ultima = await correcao.ultima_dose(usuario["id"])
+async def _pedir_confirmacao_apagar_dose(usuario: dict, args: list[str]) -> str:
+    dose = _valor_opcional(args)
+    ultima = await correcao.ultima_dose(usuario["id"], dose)
     if ultima is None:
+        if dose is not None:
+            return f"Não achei nenhuma dose de *{dose:.1f}U* registrada."
         return "Você ainda não tem nenhuma dose registrada."
     _guardar_confirmacao_pendente(usuario, f"confirmar_apagar_dose {ultima['id']}")
     momento = ultima.get("horario_aplicacao") or ultima["horario"]
@@ -464,9 +481,9 @@ async def processar_comando(usuario: dict, mensagem: str) -> str:
         if comando == "criar_senha":
             return auth_web.gerar_codigo_login(usuario["id"])
         if comando == "apagar_glicemia":
-            return await _pedir_confirmacao_apagar_glicemia(usuario)
+            return await _pedir_confirmacao_apagar_glicemia(usuario, partes[1:])
         if comando == "apagar_dose":
-            return await _pedir_confirmacao_apagar_dose(usuario)
+            return await _pedir_confirmacao_apagar_dose(usuario, partes[1:])
         if comando == "desfazer":
             return "O que você quer apagar? Manda *apagar glicemia* ou *apagar dose* (eu apago o último registro)."
         if comando == "corrigir_glicemia":
@@ -1238,7 +1255,8 @@ def _ajuda() -> str:
         "🔑 *criar senha* — gera um código pra você acessar o site de acompanhamento "
         "(glicia.pedrotx.com.br) com CPF e senha\n"
         "✏️ *apagar glicemia* / *apagar dose* — apaga o último registro lançado errado "
-        "(ou *corrigir glicemia 116* pra já trocar pelo valor certo)\n"
+        "(pra um mais antigo, manda o valor junto: *apagar glicemia 6*; ou *corrigir glicemia 116* "
+        "pra trocar a última pelo valor certo)\n"
         "🗑️ *excluir conta* — apaga permanentemente todos os seus dados (pede confirmação antes)\n\n"
         "👨‍👩‍👧 *Quem acompanha sua glicemia*\n"
         "Pra convidar alguém (esposa, mãe etc): manda *cuidador convidar*, eu te dou um "
