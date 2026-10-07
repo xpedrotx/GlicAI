@@ -177,6 +177,17 @@ async def _tratar_sugestao_pendente(usuario: dict, mensagem: str, pendente: dict
         except ValueError:
             pass
 
+    if pendente.get("pergunta") == "quantidade_fitas":
+        quantidade = _quantidade_de_fitas(mensagem)
+        if quantidade is None:
+            # não respondeu a pergunta — esquece e segue o fluxo normal
+            await _limpar_sugestao_pendente(usuario["id"])
+            usuario["sugestao_pendente"] = None
+            return None
+        await _limpar_sugestao_pendente(usuario["id"])
+        usuario["sugestao_pendente"] = None
+        return await _somar_fitas(usuario, quantidade)
+
     decisao = _sim_ou_nao(mensagem)
     if decisao is None:
         return None
@@ -222,6 +233,12 @@ def _comando_e_seguro(comando_texto: str) -> bool:
         return True
     if comando == "estoque" and len(partes) == 1:
         return True
+    if (
+        comando == "estoque" and len(partes) == 3
+        and remover_acentos(partes[1].lower()) in ("reabastecer", "repor")
+        and estoque.TIPOS_ENTRADA.get(remover_acentos(partes[2].lower())) == "fita_dextro"
+    ):
+        return True  # sem quantidade, só pergunta quantas fitas foram
     return False
 
 
@@ -1205,12 +1222,47 @@ async def _estoque_reabastecer(tipo_texto: str, resto: list[str], usuario: dict)
             f"Tipo: *estoque configurar {tipo_texto} 300*"
         )
 
+    if tipo == "fita_dextro":
+        # Fitas se somam ao que sobrou (caixa nova não substitui a antiga) —
+        # e a quantidade varia, então pergunta em vez de assumir.
+        if not resto:
+            supabase.table("usuarios").update(
+                {"sugestao_pendente": {"pergunta": "quantidade_fitas", "criado_em": datetime.now(timezone.utc).isoformat()}}
+            ).eq("id", usuario["id"]).execute()
+            return "Quantas fitas você repôs?"
+        quantidade = parse_numero(resto[0])
+        if quantidade is None or quantidade <= 0:
+            return "Quantas fitas você repôs? Manda só o número, tipo *50*."
+        return await _somar_fitas(usuario, quantidade)
+
     quantidade = parse_numero(resto[0]) if resto else linha["quantidade_por_reposicao"]
     if quantidade is None or quantidade <= 0:
         return "Manda uma quantidade válida."
 
     await estoque.reabastecer(usuario["id"], tipo, quantidade)
     return f"✅ *{estoque.TIPOS[tipo]}* reabastecido: *{quantidade:.0f}* disponíveis."
+
+
+_PALAVRAS_RESPOSTA_FITAS = {"fita", "fitas", "de", "dextro", "repus", "comprei", "mais", "foram", "sao", "umas", "uns"}
+
+
+def _quantidade_de_fitas(mensagem: str) -> float | None:
+    """Interpreta a resposta a "Quantas fitas você repôs?" ("50", "50 fitas",
+    "repus 50"). Só aceita se a frase for só isso — "glicemia 110" não pode
+    virar 110 fitas."""
+    palavras = remover_acentos(mensagem.strip().lower()).split()
+    if not palavras or any(
+        p not in _PALAVRAS_RESPOSTA_FITAS and parse_numero(p) is None for p in palavras
+    ):
+        return None
+    quantidade = parse_numero(mensagem)
+    return quantidade if quantidade and quantidade > 0 else None
+
+
+async def _somar_fitas(usuario: dict, quantidade: float) -> str:
+    await estoque.devolver(usuario["id"], "fita_dextro", quantidade)
+    linha = await estoque.buscar(usuario["id"], "fita_dextro")
+    return f"✅ Anotei *{quantidade:.0f}* fitas novas — agora você tem *{float(linha['quantidade_atual']):.0f}*."
 
 
 def _saudacao(usuario: dict) -> str:

@@ -1057,3 +1057,63 @@ def test_apagar_glicemia_com_valor_inexistente_avisa():
 
     resposta = _executar(comandos.processar_comando(usuario, "apagar glicemia 6"))
     assert "Não achei nenhuma glicemia de *6 mg/dL*" in resposta
+
+
+# --------------------------------------------------------------------------
+# reabastecer fitas: pergunta quantas e SOMA ao que sobrou (caixa nova não
+# substitui a antiga). Resposta só com número não pode virar glicemia.
+# --------------------------------------------------------------------------
+
+def _estoque_fitas(fake, usuario, atual=24):
+    estoque.supabase = fake
+    comandos.supabase = fake
+    fake.table("estoque_insumos").insert(
+        {"usuario_id": usuario["id"], "tipo": "fita_dextro", "quantidade_atual": atual,
+         "quantidade_por_reposicao": 50, "limite_alerta": 10}
+    ).execute()
+
+
+def test_reabastecer_fita_sem_quantidade_pergunta_e_soma_resposta():
+    fake = FakeSupabase()
+    usuario = _criar_usuario(fake)
+    _estoque_fitas(fake, usuario)
+
+    pergunta = _executar(comandos.processar_comando(usuario, "estoque reabastecer fita"))
+    assert "Quantas fitas" in pergunta
+
+    usuario = fake.table("usuarios").select("*").eq("id", usuario["id"]).execute().data[0]
+    resposta = _executar(comandos.processar_comando(usuario, "50"))
+
+    assert "agora você tem *74*" in resposta
+    assert fake.store.get("registros_glicemia", []) == []  # "50" não virou glicemia
+
+
+def test_reabastecer_fita_com_quantidade_soma_direto():
+    fake = FakeSupabase()
+    usuario = _criar_usuario(fake)
+    _estoque_fitas(fake, usuario, atual=10)
+
+    resposta = _executar(comandos.processar_comando(usuario, "estoque reabastecer fita 100"))
+    assert "agora você tem *110*" in resposta
+
+
+def test_resposta_que_nao_e_quantidade_de_fitas_segue_fluxo_normal():
+    fake = FakeSupabase()
+    _ligar_supabase_glicemia(fake)
+    usuario = _criar_usuario(fake)
+    _estoque_fitas(fake, usuario)
+    _executar(comandos.processar_comando(usuario, "estoque reabastecer fita"))
+    usuario = fake.table("usuarios").select("*").eq("id", usuario["id"]).execute().data[0]
+
+    with patch.object(comandos.cuidadores, "notificar_cuidadores", new=AsyncMock()):
+        _executar(comandos.processar_comando(usuario, "glicemia 110"))
+
+    assert [r["valor"] for r in fake.store["registros_glicemia"]] == [110]
+    linha = fake.table("estoque_insumos").select("*").eq("usuario_id", usuario["id"]).execute().data[0]
+    assert linha["quantidade_atual"] == 23  # só descontou a fita da glicemia
+
+
+def test_ia_reabastecer_fita_sem_quantidade_nao_pede_confirmacao_dupla():
+    assert comandos._comando_e_seguro("estoque reabastecer fita")
+    assert not comandos._comando_e_seguro("estoque reabastecer fita 50")
+    assert not comandos._comando_e_seguro("estoque reabastecer insulina")
