@@ -103,7 +103,7 @@ def test_fallback_ia_comando_seguro_executa_direto_sem_confirmar():
     with patch.object(comandos.ia, "sugerir_comando", new=sugestao):
         resposta = _executar(comandos.processar_comando(usuario, "me ajuda por favor"))
 
-    assert "Aqui está tudo o que eu sei fazer" in resposta
+    assert "GlicAI — o que eu faço" in resposta
     linha = fake.table("usuarios").select("*").eq("id", usuario["id"]).execute().data[0]
     assert linha.get("sugestao_pendente") is None
 
@@ -141,7 +141,7 @@ def test_confirmar_sugestao_com_sim_executa_o_comando():
 
     resposta = _executar(comandos.processar_comando(usuario, "sim"))
 
-    assert "Aqui está tudo o que eu sei fazer" in resposta
+    assert "GlicAI — o que eu faço" in resposta
     # sugestão consumida — some do banco
     linha = fake.table("usuarios").select("*").eq("id", usuario["id"]).execute().data[0]
     assert linha["sugestao_pendente"] is None
