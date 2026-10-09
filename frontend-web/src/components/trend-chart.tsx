@@ -90,6 +90,37 @@ function Dica({
   );
 }
 
+const MIN_POR_BLOCO = 3;
+
+type Bloco = {
+  x: number;
+  rotulo: string;
+  n: number;
+  mediana: number;
+  faixa: [number, number];
+  faixaLarga: [number, number];
+};
+
+function DicaHorario({ active, payload }: { active?: boolean; payload?: { payload: Bloco | Ponto }[] }) {
+  if (!active || !payload?.length) return null;
+  const bloco = payload.map((p) => p.payload).find((p): p is Bloco => "mediana" in p);
+  if (!bloco) return null;
+  return (
+    <div className="min-w-[190px] rounded-xl border border-border bg-card px-3.5 py-2.5 text-sm shadow-lg">
+      <p className="text-xs font-semibold text-muted">{bloco.rotulo}</p>
+      <div className="mt-1 flex items-baseline gap-1.5">
+        <span className="font-heading text-lg font-bold">{bloco.mediana}</span>
+        <span className="text-xs text-muted">mg/dL de mediana</span>
+      </div>
+      <p className="mt-1 text-xs text-muted">
+        Metade entre <span className="font-semibold text-foreground">{bloco.faixa[0]}</span> e{" "}
+        <span className="font-semibold text-foreground">{bloco.faixa[1]}</span>
+      </p>
+      <p className="text-xs text-muted">{bloco.n} medições nesse horário</p>
+    </div>
+  );
+}
+
 function useTelaEstreita(): boolean {
   return useSyncExternalStore(
     (avisar) => {
@@ -104,6 +135,7 @@ function useTelaEstreita(): boolean {
 
 export function TrendChart({ glicemias, perfil, timezone }: { glicemias: Glicemia[]; perfil: Perfil; timezone: string }) {
   const [modo, setModo] = useState<"linha" | "horario">("linha");
+  const [mostrarPontos, setMostrarPontos] = useState(false);
   const estreita = useTelaEstreita();
 
   const dados = useMemo(() => {
@@ -135,14 +167,21 @@ export function TrendChart({ glicemias, perfil, timezone }: { glicemias: Glicemi
       const bloco = Math.floor(p.x / 2) * 2; // blocos de 2h
       blocos.set(bloco, [...(blocos.get(bloco) ?? []), p.valor]);
     }
-    const perfilHorario = [...blocos.entries()]
+    // blocos com poucas medições ficam de fora: 1 ou 2 valores não dizem
+    // nada sobre "como costuma ser" aquele horário e entortariam a curva
+    const perfilHorario: Bloco[] = [...blocos.entries()]
+      .filter(([, vals]) => vals.length >= MIN_POR_BLOCO)
       .sort((a, b) => a[0] - b[0])
       .map(([bloco, vals]) => {
         const o = [...vals].sort((a, b) => a - b);
+        const p = (q: number) => Math.round(percentil(o, q));
         return {
           x: bloco + 1,
-          mediana: Math.round(percentil(o, 0.5)),
-          faixa: [Math.round(percentil(o, 0.25)), Math.round(percentil(o, 0.75))] as [number, number],
+          rotulo: `${String(bloco).padStart(2, "0")}h–${String(bloco + 2).padStart(2, "0")}h`,
+          n: o.length,
+          mediana: p(0.5),
+          faixa: [p(0.25), p(0.75)],
+          faixaLarga: [p(0.1), p(0.9)],
         };
       });
 
@@ -196,15 +235,40 @@ export function TrendChart({ glicemias, perfil, timezone }: { glicemias: Glicemi
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
-          <Legenda cor={COR.alvo} texto={`No alvo (${perfil.limite_baixo}–${perfil.limite_alto})`} />
-          <Legenda cor={COR.alta} texto="Acima" />
-          <Legenda cor={COR.baixa} texto="Abaixo" />
-          <span className="flex items-center gap-1.5">
-            <span className="h-0.5 w-4 rounded-full bg-primary" />
-            {modo === "linha" ? "Média do dia" : "Mediana"}
-          </span>
-        </div>
+        {modo === "linha" ? (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
+            <Legenda cor={COR.alvo} texto={`No alvo (${perfil.limite_baixo}–${perfil.limite_alto})`} />
+            <Legenda cor={COR.alta} texto="Acima" />
+            <Legenda cor={COR.baixa} texto="Abaixo" />
+            <span className="flex items-center gap-1.5">
+              <span className="h-0.5 w-4 rounded-full bg-primary" />
+              Média do dia
+            </span>
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
+            <span className="flex items-center gap-1.5">
+              <span className="h-0.5 w-4 rounded-full bg-primary" />
+              Mediana
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-3 w-4 rounded-sm bg-primary/35" />
+              Metade das medições
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="h-3 w-4 rounded-sm bg-primary/15" />8 em cada 10
+            </span>
+            <label className="flex cursor-pointer items-center gap-1.5 select-none">
+              <input
+                type="checkbox"
+                checked={mostrarPontos}
+                onChange={(e) => setMostrarPontos(e.target.checked)}
+                className="h-3.5 w-3.5 accent-[var(--primary)]"
+              />
+              Mostrar medições
+            </label>
+          </div>
+        )}
         <Segmentado
           opcoes={[
             { valor: "linha", rotulo: "Linha do tempo" },
@@ -257,11 +321,14 @@ export function TrendChart({ glicemias, perfil, timezone }: { glicemias: Glicemi
           )}
           <YAxis {...eixoComum} domain={[yMin, yMax]} ticks={ticksY} width={48} tickMargin={4} />
 
-          <Tooltip
-            content={<Dica timezone={timezone} />}
-            shared={false}
-            cursor={false}
-          />
+          {modo === "linha" ? (
+            <Tooltip content={<Dica timezone={timezone} />} shared={false} cursor={false} />
+          ) : (
+            <Tooltip
+              content={<DicaHorario />}
+              cursor={{ stroke: "var(--muted)", strokeDasharray: "3 3", strokeOpacity: 0.6 }}
+            />
+          )}
 
           {modo === "linha" ? (
             <>
@@ -282,10 +349,20 @@ export function TrendChart({ glicemias, perfil, timezone }: { glicemias: Glicemi
             <>
               <Area
                 data={perfilHorario}
+                dataKey="faixaLarga"
+                type="monotoneX"
+                fill="var(--primary)"
+                fillOpacity={0.1}
+                stroke="none"
+                activeDot={false}
+                isAnimationActive={false}
+              />
+              <Area
+                data={perfilHorario}
                 dataKey="faixa"
                 type="monotoneX"
                 fill="var(--primary)"
-                fillOpacity={0.2}
+                fillOpacity={0.22}
                 stroke="none"
                 activeDot={false}
                 isAnimationActive={false}
@@ -296,11 +373,19 @@ export function TrendChart({ glicemias, perfil, timezone }: { glicemias: Glicemi
                 type="monotoneX"
                 stroke="var(--primary)"
                 strokeWidth={2.5}
-                dot={false}
-                activeDot={false}
+                dot={{ r: 3, fill: "var(--primary)", stroke: "var(--card)", strokeWidth: 1.5 }}
+                activeDot={{ r: 5, fill: "var(--primary)", stroke: "var(--card)", strokeWidth: 2 }}
                 isAnimationActive={false}
               />
-              <Scatter data={porHorario} dataKey="valor" shape={<Bolinha r={raio} />} fillOpacity={0.8} isAnimationActive={false} />
+              {mostrarPontos && (
+                <Scatter
+                  data={porHorario}
+                  dataKey="valor"
+                  shape={<Bolinha r={raio * 0.7} />}
+                  opacity={0.45}
+                  isAnimationActive={false}
+                />
+              )}
             </>
           )}
         </ComposedChart>
@@ -308,8 +393,9 @@ export function TrendChart({ glicemias, perfil, timezone }: { glicemias: Glicemi
 
       {modo === "horario" && (
         <p className="mt-1 text-center text-xs text-muted">
-          Todos os dias do período sobrepostos. A faixa sombreada mostra onde caem metade das suas medições em cada
-          horário.
+          {perfilHorario.length === 0
+            ? "Ainda faltam medições para montar o perfil por horário — continue registrando."
+            : `Todos os dias do período sobrepostos, em blocos de 2h. Horários com menos de ${MIN_POR_BLOCO} medições ficam de fora.`}
         </p>
       )}
 
