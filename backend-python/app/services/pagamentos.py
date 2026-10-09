@@ -25,6 +25,12 @@ logger = logging.getLogger("glicia.pagamentos")
 PRECO_CENTAVOS = 990
 
 
+def _dict(obj) -> dict:
+    """Objetos do SDK do Stripe (v16+) nao sao dict e nao tem .get(): converte
+    pra dict puro (recursivo) antes de ler campos opcionais."""
+    return obj.to_dict() if hasattr(obj, "to_dict") else obj
+
+
 class PagamentosIndisponiveis(Exception):
     """Stripe não configurado (sem chaves no .env) ou fora do ar."""
 
@@ -92,7 +98,7 @@ async def confirmar_sessao(usuario: dict, sessao_id: str) -> dict:
 
     _exigir_configurado()
     try:
-        sessao = await stripe.checkout.Session.retrieve_async(sessao_id)
+        sessao = _dict(await stripe.checkout.Session.retrieve_async(sessao_id))
     except stripe.StripeError as erro:
         raise PagamentosIndisponiveis() from erro
 
@@ -149,7 +155,7 @@ def _buscar_usuario(usuario_id: str | None, cliente_id: str | None) -> dict | No
 async def sincronizar_assinatura(assinatura_id: str, usuario_id: str | None = None) -> dict | None:
     """Relê a assinatura no Stripe e grava o estado no usuário. Devolve o usuário atualizado."""
     _exigir_configurado()
-    assinatura = await stripe.Subscription.retrieve_async(assinatura_id)
+    assinatura = _dict(await stripe.Subscription.retrieve_async(assinatura_id))
 
     cliente = assinatura.get("customer")
     cliente_id = cliente if isinstance(cliente, str) else (cliente or {}).get("id")
@@ -181,6 +187,7 @@ _EVENTOS_ASSINATURA = {
 
 
 async def processar_evento(evento: dict) -> None:
+    evento = _dict(evento)
     tipo = evento["type"]
     objeto = evento["data"]["object"]
 

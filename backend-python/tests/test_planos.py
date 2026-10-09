@@ -255,11 +255,16 @@ def test_checkout_reaproveita_cliente_existente(stripe_configurado):
     assert criar.await_args.kwargs["customer"] == "cus_9"
 
 
+def _obj(dados: dict):
+    """Como o Stripe devolve em producao: StripeObject, que nao e dict e nao tem .get()."""
+    return stripe.StripeObject.construct_from(dados, "sk_test_x")
+
+
 def _assinatura(status="active", **extra):
-    return {
+    return _obj({
         "id": "sub_1", "status": status, "customer": "cus_1", "metadata": {"usuario_id": None},
         "items": {"data": [{"current_period_end": int(time.time()) + 86400 * 30}]}, **extra,
-    }
+    })
 
 
 def test_sincronizar_assinatura_libera_o_pro(stripe_configurado):
@@ -295,7 +300,7 @@ def test_cancelamento_derruba_pro_e_cancelar_no_fim_mantem_ate_la(stripe_configu
 
 
 def test_confirmar_sessao_recusa_sessao_de_outro_usuario(stripe_configurado):
-    sessao = {"metadata": {"usuario_id": "outro"}, "status": "complete", "subscription": "sub_1"}
+    sessao = _obj({"metadata": {"usuario_id": "outro"}, "status": "complete", "subscription": "sub_1"})
     with patch.object(stripe.checkout.Session, "retrieve_async", new=AsyncMock(return_value=sessao)):
         with pytest.raises(PermissionError):
             _executar(pagamentos.confirmar_sessao({"id": "u1"}, "cs_1"))
@@ -305,7 +310,7 @@ def test_confirmar_sessao_paga_libera_na_hora(stripe_configurado):
     fake = FakeSupabase()
     _ligar(fake)
     usuario = _usuario(fake, teste_termina_em=_dias(-1))
-    sessao = {"metadata": {"usuario_id": usuario["id"]}, "status": "complete", "subscription": "sub_1"}
+    sessao = _obj({"metadata": {"usuario_id": usuario["id"]}, "status": "complete", "subscription": "sub_1"})
 
     with patch.object(stripe.checkout.Session, "retrieve_async", new=AsyncMock(return_value=sessao)), \
          patch.object(stripe.Subscription, "retrieve_async", new=AsyncMock(return_value=_assinatura())):
@@ -316,7 +321,7 @@ def test_confirmar_sessao_paga_libera_na_hora(stripe_configurado):
 
 
 def test_confirmar_sessao_ainda_nao_paga_fica_pendente(stripe_configurado):
-    sessao = {"metadata": {"usuario_id": "u1"}, "status": "open"}
+    sessao = _obj({"metadata": {"usuario_id": "u1"}, "status": "open"})
     with patch.object(stripe.checkout.Session, "retrieve_async", new=AsyncMock(return_value=sessao)):
         resultado = _executar(pagamentos.confirmar_sessao({"id": "u1", "teste_termina_em": _dias(-1)}, "cs_1"))
     assert resultado["status"] == "pendente"
@@ -335,13 +340,15 @@ def test_portal_exige_cliente_do_stripe(stripe_configurado):
 def test_evento_de_fatura_paga_sincroniza_a_assinatura(stripe_configurado):
     sincronizar = AsyncMock()
     with patch.object(pagamentos, "sincronizar_assinatura", new=sincronizar):
-        _executar(pagamentos.processar_evento(
+        _executar(pagamentos.processar_evento(_obj(
             {"type": "invoice.payment_failed", "data": {"object": {"parent": {"subscription_details": {"subscription": "sub_7"}}}}}
-        ))
-        _executar(pagamentos.processar_evento({"type": "customer.subscription.deleted", "data": {"object": {"id": "sub_8"}}}))
-        _executar(pagamentos.processar_evento({"type": "charge.succeeded", "data": {"object": {"id": "ch_1"}}}))
+        )))
+        _executar(pagamentos.processar_evento(_obj({"type": "customer.subscription.deleted", "data": {"object": {"id": "sub_8"}}})))
+        _executar(pagamentos.processar_evento(_obj({"type": "checkout.session.completed", "data": {"object": {
+            "mode": "subscription", "subscription": "sub_9", "metadata": {"usuario_id": "u1"}}}})))
+        _executar(pagamentos.processar_evento(_obj({"type": "charge.succeeded", "data": {"object": {"id": "ch_1"}}})))
 
-    assert [c.args[0] for c in sincronizar.await_args_list] == ["sub_7", "sub_8"]
+    assert [c.args[0] for c in sincronizar.await_args_list] == ["sub_7", "sub_8", "sub_9"]
 
 
 # --------------------------------------------------------------------------
