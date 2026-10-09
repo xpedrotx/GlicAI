@@ -1,36 +1,30 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Activity, Droplet, Gauge, Target, TriangleAlert } from "lucide-react";
+import { CalendarDays, ChartColumn, ChartPie, Clock, Droplet, Gauge, Target, TriangleAlert } from "lucide-react";
 import { api } from "@/lib/api";
 import { useUsuario } from "@/lib/auth-context";
 import type { Historico } from "@/lib/types";
 import { classificarGlicemia, corParaCss, formatarContexto, formatarData, formatarHorario } from "@/lib/clinico";
-import { Card, CardTitulo, PageHeader, Segmentado, Skeleton, StatCard, Vazio } from "@/components/ui";
-import { TrendChart } from "@/components/trend-chart";
+import { Card, CardTitulo, PageHeader, Skeleton, StatCard, Vazio } from "@/components/ui";
+import { GraficoHoje, GraficoMensal, GraficoPeriodos, Legenda, PizzaTempoNoAlvo } from "@/components/graficos";
 
-const PERIODOS = [
-  { valor: 7, rotulo: "7 dias" },
-  { valor: 30, rotulo: "30 dias" },
-  { valor: 90, rotulo: "90 dias" },
-];
+// Visão geral sempre olha os últimos 30 dias (gráfico mensal) + o dia de hoje.
+const DIAS = 30;
 
 export default function DashboardPage() {
   const usuario = useUsuario();
-  const [dias, setDias] = useState(30);
   const [dados, setDados] = useState<Historico | null>(null);
   const [carregando, setCarregando] = useState(true);
   const [erro, setErro] = useState("");
 
   useEffect(() => {
-    setCarregando(true);
-    setErro("");
     api
-      .historico(dias)
+      .historico(DIAS)
       .then(setDados)
       .catch(() => setErro("Não consegui carregar seu histórico agora. Tenta de novo."))
       .finally(() => setCarregando(false));
-  }, [dias]);
+  }, []);
 
   const primeiroNome = usuario?.nome?.trim().split(" ")[0];
 
@@ -38,8 +32,8 @@ export default function DashboardPage() {
     <div className="flex flex-col gap-6">
       <PageHeader
         titulo={primeiroNome ? `Olá, ${primeiroNome}` : "Visão geral"}
-        descricao={`Seu resumo de glicemia dos últimos ${dias} dias.`}
-        acao={<Segmentado opcoes={PERIODOS} valor={dias} aoMudar={setDias} />}
+        descricao={`Seu dia de hoje e o resumo dos últimos ${DIAS} dias.`}
+        acao={dados?.perfil ? <Legenda /> : undefined}
       />
 
       {carregando && <Carregando />}
@@ -64,19 +58,49 @@ export default function DashboardPage() {
         <>
           <Resumo dados={dados} />
 
-          <Card>
-            <CardTitulo
-              icone={<Activity size={18} />}
-              titulo="Tendência"
-              descricao={`Faixa-alvo: ${dados.perfil.limite_baixo}–${dados.perfil.limite_alto} mg/dL · meta ${dados.perfil.meta_glicemia}`}
-            />
-            <TrendChart glicemias={dados.glicemias} perfil={dados.perfil} timezone={dados.timezone ?? "America/Sao_Paulo"} />
-          </Card>
+          <Graficos dados={dados} />
 
           <TabelaGlicemias dados={dados} />
         </>
       )}
     </div>
+  );
+}
+
+function Graficos({ dados }: { dados: Historico }) {
+  const perfil = dados.perfil!;
+  const tz = dados.timezone ?? "America/Sao_Paulo";
+  const { glicemias } = dados;
+  const hoje = new Date().toLocaleDateString("pt-BR", { timeZone: tz, weekday: "long", day: "numeric", month: "long" });
+
+  return (
+    <>
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardTitulo icone={<Clock size={18} />} titulo="Hoje" descricao={hoje.charAt(0).toUpperCase() + hoje.slice(1)} />
+          <GraficoHoje glicemias={glicemias} perfil={perfil} timezone={tz} />
+        </Card>
+        <Card>
+          <CardTitulo icone={<ChartPie size={18} />} titulo="Tempo no alvo" descricao={`Últimos ${DIAS} dias`} />
+          <PizzaTempoNoAlvo glicemias={glicemias} perfil={perfil} />
+        </Card>
+      </div>
+
+      <div className="grid gap-6 lg:grid-cols-3">
+        <Card className="lg:col-span-2">
+          <CardTitulo
+            icone={<CalendarDays size={18} />}
+            titulo="Mês"
+            descricao={`Média de cada dia nos últimos ${DIAS} dias · faixa-alvo ${perfil.limite_baixo}–${perfil.limite_alto} mg/dL`}
+          />
+          <GraficoMensal glicemias={glicemias} perfil={perfil} timezone={tz} dias={DIAS} />
+        </Card>
+        <Card>
+          <CardTitulo icone={<ChartColumn size={18} />} titulo="Por período do dia" descricao="Média em cada parte do dia" />
+          <GraficoPeriodos glicemias={glicemias} perfil={perfil} timezone={tz} />
+        </Card>
+      </div>
+    </>
   );
 }
 
