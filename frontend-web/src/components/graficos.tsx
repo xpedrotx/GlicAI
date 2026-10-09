@@ -1,6 +1,6 @@
 "use client";
 
-import { useSyncExternalStore } from "react";
+import { useState, useSyncExternalStore } from "react";
 import {
   Bar,
   BarChart,
@@ -306,6 +306,10 @@ export function GraficoMensal({
 // --------------------------------------------------------------------------
 
 export function PizzaTempoNoAlvo({ glicemias, perfil }: { glicemias: Glicemia[]; perfil: Perfil }) {
+  // Fatia/linha sob o mouse: o centro da rosca passa a mostrar o dado dela.
+  // (Antes era um balão flutuante que caía em cima do número do centro.)
+  const [ativo, setAtivo] = useState<Faixa | null>(null);
+
   const total = glicemias.length;
   const contagem = { baixa: 0, alvo: 0, alta: 0 } as Record<Faixa, number>;
   for (const g of glicemias) contagem[faixaDe(g.valor, perfil)] += 1;
@@ -316,9 +320,12 @@ export function PizzaTempoNoAlvo({ glicemias, perfil }: { glicemias: Glicemia[];
     return <p className="flex h-[260px] items-center justify-center text-sm text-muted">Sem medições no período.</p>;
   }
 
+  const mostrado: Faixa = ativo ?? "alvo";
+  const corCentro = ativo ? COR[ativo] : pct("alvo") >= 70 ? "var(--verde)" : undefined;
+
   return (
     <div>
-      <div className="relative h-[200px]">
+      <div className="relative h-[200px]" onMouseLeave={() => setAtivo(null)}>
         <ResponsiveContainer width="100%" height="100%">
           <PieChart>
             <Pie
@@ -333,39 +340,40 @@ export function PizzaTempoNoAlvo({ glicemias, perfil }: { glicemias: Glicemia[];
               startAngle={90}
               endAngle={-270}
               isAnimationActive={false}
+              onMouseEnter={(_, i) => setAtivo(dados[i].faixa)}
+              onMouseLeave={() => setAtivo(null)}
             >
               {dados.map((d) => (
-                <Cell key={d.faixa} fill={COR[d.faixa]} />
+                <Cell
+                  key={d.faixa}
+                  fill={COR[d.faixa]}
+                  fillOpacity={ativo && ativo !== d.faixa ? 0.3 : 1}
+                  style={{ transition: "fill-opacity 0.15s", outline: "none" }}
+                />
               ))}
             </Pie>
-            <Tooltip
-              content={({ active, payload }) => {
-                const d = active && (payload?.[0]?.payload as { faixa: Faixa; valor: number } | undefined);
-                if (!d) return null;
-                return (
-                  <CaixaDica>
-                    <p className="text-xs font-semibold" style={{ color: COR[d.faixa] }}>
-                      {ROTULO[d.faixa]}
-                    </p>
-                    <p className="text-xs text-muted">
-                      {d.valor} de {total} medições ({pct(d.faixa)}%)
-                    </p>
-                  </CaixaDica>
-                );
-              }}
-            />
           </PieChart>
         </ResponsiveContainer>
-        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
-          <span className="font-heading text-3xl font-extrabold" style={{ color: pct("alvo") >= 70 ? "var(--verde)" : undefined }}>
-            {pct("alvo")}%
+        <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center text-center">
+          <span className="font-heading text-3xl font-extrabold" style={corCentro ? { color: corCentro } : undefined}>
+            {pct(mostrado)}%
           </span>
-          <span className="text-xs text-muted">no alvo</span>
+          <span className="text-xs text-muted">{ativo ? ROTULO[ativo] : "no alvo"}</span>
+          <span className="mt-0.5 text-[11px] text-muted">
+            {ativo ? `${contagem[ativo]} de ${total} medições` : ""}
+          </span>
         </div>
       </div>
-      <div className="mt-4 flex flex-col gap-2">
+      <div className="mt-4 flex flex-col gap-1">
         {FAIXAS.map((f) => (
-          <div key={f} className="flex items-center justify-between text-sm">
+          <div
+            key={f}
+            onMouseEnter={() => setAtivo(f)}
+            onMouseLeave={() => setAtivo(null)}
+            className={`-mx-2 flex items-center justify-between rounded-lg px-2 py-1 text-sm transition ${
+              ativo === f ? "bg-surface" : ""
+            }`}
+          >
             <span className="flex items-center gap-2 text-foreground/80">
               <span className="h-2.5 w-2.5 rounded-full" style={{ background: COR[f] }} />
               {ROTULO[f]}

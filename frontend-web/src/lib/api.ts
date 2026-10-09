@@ -118,8 +118,15 @@ export const api = {
   removerMedico: (id: string) => chamar<{ status: string }>(`/dashboard/medicos/${id}`, { method: "DELETE" }),
 
   // --- Painel do médico ---
+  /** 1ª etapa: manda o código de 6 dígitos por e-mail (a conta só nasce em medicoConfirmarEmail). */
   medicoCadastro: (dados: { nome: string; email: string; crm: string; uf: string; senha: string }) =>
-    chamar<{ status: string }>("/medico/cadastro", { method: "POST", body: JSON.stringify(dados) }),
+    chamar<{ status: string; email: string }>("/medico/cadastro", { method: "POST", body: JSON.stringify(dados) }),
+
+  medicoConfirmarEmail: (email: string, codigo: string) =>
+    chamar<{ status: string }>("/medico/confirmar-email", { method: "POST", body: JSON.stringify({ email, codigo }) }),
+
+  medicoReenviarCodigo: (email: string) =>
+    chamar<{ status: string }>("/medico/reenviar-codigo", { method: "POST", body: JSON.stringify({ email }) }),
 
   medicoLogin: (email: string, senha: string) =>
     chamar<{ status: string }>("/medico/login", { method: "POST", body: JSON.stringify({ email, senha }) }),

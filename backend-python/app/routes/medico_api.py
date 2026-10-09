@@ -48,13 +48,41 @@ class CadastroBody(BaseModel):
 
 
 @router.post("/cadastro")
-async def cadastro(body: CadastroBody, request: Request, response: Response):
+async def cadastro(body: CadastroBody, request: Request):
+    """1ª etapa: valida e manda o código de 6 dígitos por e-mail. A conta só nasce em /confirmar-email."""
     try:
-        token = await medicos.cadastrar(body.nome, body.email, body.crm, body.uf, body.senha, _ip_cliente(request))
+        email = await medicos.iniciar_cadastro(body.nome, body.email, body.crm, body.uf, body.senha, _ip_cliente(request))
+    except auth_web.ErroAutenticacao as erro:
+        raise HTTPException(status_code=400, detail=str(erro)) from erro
+    return {"status": "codigo_enviado", "email": email}
+
+
+class ConfirmarEmailBody(BaseModel):
+    email: str
+    codigo: str
+
+
+@router.post("/confirmar-email")
+async def confirmar_email(body: ConfirmarEmailBody, response: Response):
+    try:
+        token = await medicos.confirmar_email(body.email, body.codigo)
     except auth_web.ErroAutenticacao as erro:
         raise HTTPException(status_code=400, detail=str(erro)) from erro
     _setar_cookie(response, token)
     return {"status": "ok"}
+
+
+class ReenviarCodigoBody(BaseModel):
+    email: str
+
+
+@router.post("/reenviar-codigo")
+async def reenviar_codigo(body: ReenviarCodigoBody):
+    try:
+        await medicos.reenviar_codigo(body.email)
+    except auth_web.ErroAutenticacao as erro:
+        raise HTTPException(status_code=400, detail=str(erro)) from erro
+    return {"status": "codigo_enviado"}
 
 
 class LoginBody(BaseModel):

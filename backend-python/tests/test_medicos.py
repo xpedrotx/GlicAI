@@ -1,4 +1,5 @@
 import asyncio
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -22,8 +23,33 @@ def _ligar(fake):
     exportacao.supabase = fake
 
 
+class CaixaDeEmail:
+    """Troca o envio real (Resend) por uma lista, pra o teste ler o código que iria no e-mail."""
+
+    def __init__(self):
+        self.enviados: list[dict] = []
+
+    async def enviar(self, para, assunto, texto, html):
+        self.enviados.append({"para": para, "assunto": assunto, "texto": texto, "html": html})
+
+    @property
+    def ultimo_codigo(self) -> str:
+        return re.search(r"\b(\d{6})\b", self.enviados[-1]["texto"]).group(1)
+
+
+@pytest.fixture
+def caixa(monkeypatch):
+    caixa = CaixaDeEmail()
+    monkeypatch.setattr(medicos.email_envio, "enviar", caixa.enviar)
+    return caixa
+
+
 def _medico(fake, nome="Ana Souza", email="ana@clinica.com", ip="1.1.1.1"):
-    token = _executar(medicos.cadastrar(nome, email, "123456", "SP", "senha-segura", ip))
+    """Cadastro completo: pede o código, lê do e-mail e confirma."""
+    caixa = CaixaDeEmail()
+    with patch.object(medicos.email_envio, "enviar", new=caixa.enviar):
+        _executar(medicos.iniciar_cadastro(nome, email, "123456", "SP", "senha-segura", ip))
+    token = _executar(medicos.confirmar_email(email, caixa.ultimo_codigo))
     return _executar(medicos.validar_sessao(token)), token
 
 
@@ -71,15 +97,25 @@ def test_codigos_gerados_sao_validos_e_diferentes():
 # conta do médico
 # --------------------------------------------------------------------------
 
-def test_cadastro_cria_conta_com_codigo_e_senha_com_hash():
+def test_cadastro_so_cria_a_conta_depois_de_confirmar_o_e_mail(caixa):
     fake = FakeSupabase()
     _ligar(fake)
-    medico, token = _medico(fake)
 
+    _executar(medicos.iniciar_cadastro("Ana Souza", "ANA@Clinica.com", "123456", "SP", "senha-segura", "1.1.1.1"))
+    assert fake.store.get("medicos", []) == []  # ainda não existe conta
+    assert caixa.enviados[0]["para"] == "ana@clinica.com"
+    codigo = caixa.ultimo_codigo
+    pendente = fake.store["cadastros_medico_pendentes"][0]
+    assert codigo not in str(pendente)  # só o hash do código fica guardado
+    assert pendente["senha_hash"].startswith("$2")
+
+    token = _executar(medicos.confirmar_email("ana@clinica.com", codigo))
+    medico = _executar(medicos.validar_sessao(token))
     assert medico["nome"] == "Ana Souza" and medico["uf"] == "SP"
     assert medico["codigo_vinculo"].startswith("DR-")
-    assert medico["senha_hash"] != "senha-segura" and medico["senha_hash"].startswith("$2")
+    assert medico["senha_hash"] != "senha-segura"
     assert "senha_hash" not in medicos.dados_publicos(medico)
+    assert fake.store["cadastros_medico_pendentes"] == []  # pendente some depois de confirmar
     assert token not in str(fake.store["sessoes_medico"])  # só o hash da sessão fica no banco
 
 
@@ -93,22 +129,22 @@ def test_cadastro_cria_conta_com_codigo_e_senha_com_hash():
         ("senha", "curta", "pelo menos 8"),
     ],
 )
-def test_cadastro_valida_os_campos(campo, valor, mensagem):
+def test_cadastro_valida_os_campos(campo, valor, mensagem, caixa):
     fake = FakeSupabase()
     _ligar(fake)
     dados = {"nome": "Ana Souza", "email": "ana@clinica.com", "crm": "123456", "uf": "SP", "senha": "senha-segura"}
     dados[campo] = valor
     with pytest.raises(auth_web.ErroAutenticacao, match=mensagem):
-        _executar(medicos.cadastrar(dados["nome"], dados["email"], dados["crm"], dados["uf"], dados["senha"], "1.1.1.1"))
-    assert fake.store.get("medicos", []) == []
+        _executar(medicos.iniciar_cadastro(dados["nome"], dados["email"], dados["crm"], dados["uf"], dados["senha"], "1.1.1.1"))
+    assert fake.store.get("medicos", []) == [] and caixa.enviados == []
 
 
-def test_cadastro_recusa_email_repetido_sem_diferenciar_maiusculas():
+def test_cadastro_recusa_email_repetido_sem_diferenciar_maiusculas(caixa):
     fake = FakeSupabase()
     _ligar(fake)
     _medico(fake)
     with pytest.raises(auth_web.ErroAutenticacao, match="Já existe"):
-        _executar(medicos.cadastrar("Outro Nome", "ANA@Clinica.com", "999999", "RJ", "senha-segura", "2.2.2.2"))
+        _executar(medicos.iniciar_cadastro("Outro Nome", "ANA@Clinica.com", "999999", "RJ", "senha-segura", "2.2.2.2"))
 
 
 def test_cadastro_em_massa_pelo_mesmo_ip_e_barrado():
@@ -118,6 +154,132 @@ def test_cadastro_em_massa_pelo_mesmo_ip_e_barrado():
         _medico(fake, nome=f"Medico {i}", email=f"m{i}@x.com", ip="9.9.9.9")
     with pytest.raises(auth_web.ErroAutenticacao, match="Muitas tentativas"):
         _medico(fake, nome="Mais Um", email="mais@x.com", ip="9.9.9.9")
+
+
+def _iniciar(caixa, email="ana@clinica.com", ip="1.1.1.1"):
+    return _executar(medicos.iniciar_cadastro("Ana Souza", email, "123456", "SP", "senha-segura", ip))
+
+
+def test_codigo_do_email_errado_conta_tentativas_e_depois_descarta_o_cadastro(caixa):
+    fake = FakeSupabase()
+    _ligar(fake)
+    _iniciar(caixa)
+    certo = caixa.ultimo_codigo
+    errado = "000000" if certo != "000000" else "111111"
+
+    for restantes in (4, 3, 2, 1):
+        with pytest.raises(auth_web.ErroAutenticacao, match=f"mais {restantes} tentativa"):
+            _executar(medicos.confirmar_email("ana@clinica.com", errado))
+    with pytest.raises(auth_web.ErroAutenticacao, match="Muitos erros"):
+        _executar(medicos.confirmar_email("ana@clinica.com", errado))
+
+    # depois do limite nem o código certo vale: é preciso recomeçar
+    with pytest.raises(auth_web.ErroAutenticacao, match="inválido ou expirado"):
+        _executar(medicos.confirmar_email("ana@clinica.com", certo))
+    assert fake.store.get("medicos", []) == []
+
+
+def test_codigo_do_email_expira(caixa):
+    fake = FakeSupabase()
+    _ligar(fake)
+    _iniciar(caixa)
+    fake.store["cadastros_medico_pendentes"][0]["expira_em"] = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+
+    with pytest.raises(auth_web.ErroAutenticacao, match="expirou"):
+        _executar(medicos.confirmar_email("ana@clinica.com", caixa.ultimo_codigo))
+    assert fake.store.get("medicos", []) == []
+
+
+def test_confirmar_aceita_o_codigo_com_espacos_e_sem_cadastro_pendente_falha(caixa):
+    fake = FakeSupabase()
+    _ligar(fake)
+    with pytest.raises(auth_web.ErroAutenticacao, match="inválido ou expirado"):
+        _executar(medicos.confirmar_email("ninguem@x.com", "123456"))
+
+    _iniciar(caixa)
+    codigo = caixa.ultimo_codigo
+    token = _executar(medicos.confirmar_email(" ANA@clinica.com ", f"{codigo[:3]} {codigo[3:]}"))
+    assert _executar(medicos.validar_sessao(token)) is not None
+
+
+def test_nao_deixa_confirmar_duas_vezes_o_mesmo_cadastro(caixa):
+    fake = FakeSupabase()
+    _ligar(fake)
+    _iniciar(caixa)
+    codigo = caixa.ultimo_codigo
+    _executar(medicos.confirmar_email("ana@clinica.com", codigo))
+    with pytest.raises(auth_web.ErroAutenticacao):
+        _executar(medicos.confirmar_email("ana@clinica.com", codigo))
+    assert len(fake.store["medicos"]) == 1
+
+
+def test_falha_no_envio_do_email_nao_deixa_cadastro_pendente(monkeypatch):
+    fake = FakeSupabase()
+    _ligar(fake)
+
+    async def quebrado(*_a, **_k):
+        raise medicos.email_envio.EmailIndisponivel("fora do ar")
+
+    monkeypatch.setattr(medicos.email_envio, "enviar", quebrado)
+    with pytest.raises(auth_web.ErroAutenticacao, match="enviar o e-mail"):
+        _executar(medicos.iniciar_cadastro("Ana Souza", "ana@clinica.com", "123456", "SP", "senha-segura", "1.1.1.1"))
+    assert fake.store.get("cadastros_medico_pendentes", []) == []
+    assert fake.store.get("tentativas_auth", []) == []  # nem gasta a cota de tentativas do IP
+
+
+def test_recomecar_o_cadastro_substitui_o_pendente_e_invalida_o_codigo_anterior(caixa):
+    fake = FakeSupabase()
+    _ligar(fake)
+    _iniciar(caixa)
+    primeiro = caixa.ultimo_codigo
+    _iniciar(caixa)
+    segundo = caixa.ultimo_codigo
+
+    assert len(fake.store["cadastros_medico_pendentes"]) == 1
+    if primeiro != segundo:
+        with pytest.raises(auth_web.ErroAutenticacao, match="incorreto"):
+            _executar(medicos.confirmar_email("ana@clinica.com", primeiro))
+    assert _executar(medicos.validar_sessao(_executar(medicos.confirmar_email("ana@clinica.com", segundo)))) is not None
+
+
+def test_reenviar_codigo_tem_intervalo_e_limite(caixa):
+    fake = FakeSupabase()
+    _ligar(fake)
+    _iniciar(caixa)
+
+    with pytest.raises(auth_web.ErroAutenticacao, match="Aguarde um minuto"):
+        _executar(medicos.reenviar_codigo("ana@clinica.com"))
+
+    for i in range(medicos.MAX_REENVIOS):
+        fake.store["cadastros_medico_pendentes"][0]["ultimo_envio_em"] = (
+            datetime.now(timezone.utc) - timedelta(minutes=2)
+        ).isoformat()
+        _executar(medicos.reenviar_codigo("ana@clinica.com"))
+    assert len(caixa.enviados) == 1 + medicos.MAX_REENVIOS
+
+    fake.store["cadastros_medico_pendentes"][0]["ultimo_envio_em"] = (
+        datetime.now(timezone.utc) - timedelta(minutes=2)
+    ).isoformat()
+    with pytest.raises(auth_web.ErroAutenticacao, match="Muitos reenvios"):
+        _executar(medicos.reenviar_codigo("ana@clinica.com"))
+
+    # o último código enviado é o que vale
+    token = _executar(medicos.confirmar_email("ana@clinica.com", caixa.ultimo_codigo))
+    assert _executar(medicos.validar_sessao(token)) is not None
+
+
+def test_reenviar_sem_cadastro_pendente_falha(caixa):
+    fake = FakeSupabase()
+    _ligar(fake)
+    with pytest.raises(auth_web.ErroAutenticacao, match="Não achei"):
+        _executar(medicos.reenviar_codigo("ninguem@x.com"))
+
+
+def test_email_nao_leva_html_do_nome_digitado(caixa):
+    fake = FakeSupabase()
+    _ligar(fake)
+    _executar(medicos.iniciar_cadastro("<script>alert(1)</script> Silva", "ana@clinica.com", "123456", "SP", "senha-segura", "1.1.1.1"))
+    assert "<script>" not in caixa.enviados[0]["html"]
 
 
 def test_login_e_sessao_e_logout():

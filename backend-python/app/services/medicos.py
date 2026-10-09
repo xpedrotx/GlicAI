@@ -14,13 +14,18 @@ O CRM é informado pelo próprio médico e não é verificado automaticamente �
 paciente vê nome e CRM antes de confirmar o vínculo, justamente pra poder
 conferir que é o médico dele.
 """
+import hashlib
+import hmac
+import html
 import logging
 import re
 import secrets
+import string
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
 
+from app.services import email_envio
 from app.services.auth_web import (
     DIAS_VALIDADE_SESSAO,
     SENHA_MINIMO_CARACTERES,
@@ -88,33 +93,156 @@ def _validar_cadastro(nome: str, email: str, crm: str, uf: str, senha: str) -> t
     return nome, email, crm, uf
 
 
-async def cadastrar(nome: str, email: str, crm: str, uf: str, senha: str, ip: str) -> str:
-    """Cria a conta e já devolve o token de sessão (texto puro; só o hash fica no banco)."""
+MINUTOS_VALIDADE_CODIGO_EMAIL = 15
+MAX_ERROS_CODIGO_EMAIL = 5
+MAX_REENVIOS = 3
+SEGUNDOS_ENTRE_ENVIOS = 60
+
+
+def _hash_codigo_email(codigo: str) -> str:
+    return hashlib.sha256(codigo.encode()).hexdigest()
+
+
+async def _enviar_codigo_por_email(nome: str, email: str, codigo: str) -> None:
+    primeiro_nome = html.escape(nome.split()[0])
+    texto = (
+        f"Olá, {nome.split()[0]}!\n\n"
+        f"Seu código de confirmação do GlicAI é: {codigo}\n\n"
+        f"Ele vale por {MINUTOS_VALIDADE_CODIGO_EMAIL} minutos. Se você não pediu esse cadastro, é só ignorar este e-mail."
+    )
+    corpo = (
+        f'<div style="font-family:Arial,sans-serif;max-width:480px;margin:auto;color:#1b3a4b">'
+        f"<h2 style=\"margin:0 0 12px\">Confirme seu e-mail</h2>"
+        f"<p>Olá, {primeiro_nome}! Use este código para concluir seu cadastro no GlicAI:</p>"
+        f'<p style="font-size:34px;font-weight:bold;letter-spacing:8px;margin:20px 0">{codigo}</p>'
+        f"<p>Ele vale por {MINUTOS_VALIDADE_CODIGO_EMAIL} minutos. Se você não pediu esse cadastro, é só ignorar este e-mail.</p>"
+        f"</div>"
+    )
+    try:
+        await email_envio.enviar(email, "Seu código de confirmação do GlicAI", texto, corpo)
+    except email_envio.EmailIndisponivel as erro:
+        raise ErroAutenticacao("Não consegui enviar o e-mail agora. Tente de novo em instantes.") from erro
+
+
+async def iniciar_cadastro(nome: str, email: str, crm: str, uf: str, senha: str, ip: str) -> str:
+    """
+    1ª etapa: valida os dados e manda um código de 6 dígitos pro e-mail. A conta
+    só é criada em confirmar_email() — assim ninguém cria conta com e-mail
+    alheio. Devolve o e-mail já normalizado.
+    """
     _verificar_rate_limit(ip, "cadastro_medico")
     nome, email, crm, uf = _validar_cadastro(nome, email, crm, uf, senha)
 
-    existente = supabase.table("medicos").select("id").eq("email", email).limit(1).execute().data
-    if existente:
+    if supabase.table("medicos").select("id").eq("email", email).limit(1).execute().data:
         raise ErroAutenticacao("Já existe uma conta com esse e-mail. Entre ou use outro e-mail.")
 
-    # Conta toda conta criada (não só as falhas): sem isso, dava pra criar contas em massa.
-    # Só depois de validar, pra um erro de digitação não gastar a cota de quem é médico de verdade.
-    _registrar_falha(ip, "cadastro_medico")
+    codigo = "".join(secrets.choice(string.digits) for _ in range(6))
+    agora = datetime.now(timezone.utc)
+    pendente = {
+        "nome": nome,
+        "email": email,
+        "crm": crm,
+        "uf": uf,
+        "senha_hash": bcrypt.hashpw(senha.encode(), bcrypt.gensalt()).decode(),
+        "codigo_hash": _hash_codigo_email(codigo),
+        "expira_em": (agora + timedelta(minutes=MINUTOS_VALIDADE_CODIGO_EMAIL)).isoformat(),
+        "tentativas": 0,
+        "reenvios": 0,
+        "ultimo_envio_em": agora.isoformat(),
+    }
 
-    senha_hash = bcrypt.hashpw(senha.encode(), bcrypt.gensalt()).decode()
+    # Manda o e-mail ANTES de gravar: se o envio falhar, não sobra cadastro pendente
+    await _enviar_codigo_por_email(nome, email, codigo)
+
+    # recomeçar o cadastro com o mesmo e-mail substitui o pendente anterior
+    supabase.table("cadastros_medico_pendentes").delete().eq("email", email).execute()
+    supabase.table("cadastros_medico_pendentes").insert(pendente).execute()
+
+    # Conta todo cadastro iniciado (não só as falhas): sem isso, dava pra disparar e-mails em massa.
+    _registrar_falha(ip, "cadastro_medico")
+    return email
+
+
+def _pendente(email: str) -> dict | None:
+    achados = (
+        supabase.table("cadastros_medico_pendentes").select("*").eq("email", (email or "").strip().lower()).limit(1).execute().data
+    )
+    return achados[0] if achados else None
+
+
+async def reenviar_codigo(email: str) -> None:
+    pendente = _pendente(email)
+    if pendente is None:
+        raise ErroAutenticacao("Não achei esse cadastro. Preencha os dados de novo.")
+    if pendente["reenvios"] >= MAX_REENVIOS:
+        raise ErroAutenticacao("Muitos reenvios. Preencha o cadastro de novo.")
+
+    agora = datetime.now(timezone.utc)
+    ultimo = datetime.fromisoformat(str(pendente["ultimo_envio_em"]).replace("Z", "+00:00"))
+    if (agora - ultimo).total_seconds() < SEGUNDOS_ENTRE_ENVIOS:
+        raise ErroAutenticacao("Aguarde um minuto para pedir outro código.")
+
+    codigo = "".join(secrets.choice(string.digits) for _ in range(6))
+    await _enviar_codigo_por_email(pendente["nome"], pendente["email"], codigo)
+    supabase.table("cadastros_medico_pendentes").update(
+        {
+            "codigo_hash": _hash_codigo_email(codigo),
+            "expira_em": (agora + timedelta(minutes=MINUTOS_VALIDADE_CODIGO_EMAIL)).isoformat(),
+            "tentativas": 0,
+            "reenvios": pendente["reenvios"] + 1,
+            "ultimo_envio_em": agora.isoformat(),
+        }
+    ).eq("id", pendente["id"]).execute()
+
+
+async def confirmar_email(email: str, codigo: str) -> str:
+    """2ª etapa: com o código certo, cria a conta e devolve o token de sessão."""
+    pendente = _pendente(email)
+    if pendente is None:
+        raise ErroAutenticacao("Código inválido ou expirado. Preencha o cadastro de novo.")
+
+    agora = datetime.now(timezone.utc)
+    expira_em = datetime.fromisoformat(str(pendente["expira_em"]).replace("Z", "+00:00"))
+    if agora > expira_em:
+        supabase.table("cadastros_medico_pendentes").delete().eq("id", pendente["id"]).execute()
+        raise ErroAutenticacao("O código expirou. Preencha o cadastro de novo para receber outro.")
+
+    digitado = re.sub(r"\D", "", codigo or "")
+    if not hmac.compare_digest(_hash_codigo_email(digitado), pendente["codigo_hash"]):
+        tentativas = pendente["tentativas"] + 1
+        if tentativas >= MAX_ERROS_CODIGO_EMAIL:
+            supabase.table("cadastros_medico_pendentes").delete().eq("id", pendente["id"]).execute()
+            raise ErroAutenticacao("Muitos erros de código. Preencha o cadastro de novo.")
+        supabase.table("cadastros_medico_pendentes").update({"tentativas": tentativas}).eq("id", pendente["id"]).execute()
+        raise ErroAutenticacao(f"Código incorreto. Você tem mais {MAX_ERROS_CODIGO_EMAIL - tentativas} tentativa(s).")
+
+    if supabase.table("medicos").select("id").eq("email", pendente["email"]).limit(1).execute().data:
+        supabase.table("cadastros_medico_pendentes").delete().eq("id", pendente["id"]).execute()
+        raise ErroAutenticacao("Já existe uma conta com esse e-mail. Entre com sua senha.")
+
     for _ in range(8):
-        codigo = _gerar_codigo()
-        if not supabase.table("medicos").select("id").eq("codigo_vinculo", codigo).limit(1).execute().data:
+        codigo_vinculo = _gerar_codigo()
+        if not supabase.table("medicos").select("id").eq("codigo_vinculo", codigo_vinculo).limit(1).execute().data:
             break
     else:
         raise ErroAutenticacao("Não consegui gerar seu código agora. Tente de novo.")
 
     medico = (
         supabase.table("medicos")
-        .insert({"nome": nome, "email": email, "crm": crm, "uf": uf, "senha_hash": senha_hash, "codigo_vinculo": codigo})
+        .insert(
+            {
+                "nome": pendente["nome"],
+                "email": pendente["email"],
+                "crm": pendente["crm"],
+                "uf": pendente["uf"],
+                "senha_hash": pendente["senha_hash"],
+                "codigo_vinculo": codigo_vinculo,
+            }
+        )
         .execute()
         .data[0]
     )
+    supabase.table("cadastros_medico_pendentes").delete().eq("id", pendente["id"]).execute()
     return await criar_sessao(medico["id"])
 
 
