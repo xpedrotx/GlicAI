@@ -7,6 +7,10 @@ FROM node:20-slim AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# Número do WhatsApp de vendas da página inicial (ver src/lib/site.ts) —
+# variáveis NEXT_PUBLIC_* entram no bundle na hora do build.
+ARG NEXT_PUBLIC_WHATSAPP_VENDAS=""
+ENV NEXT_PUBLIC_WHATSAPP_VENDAS=$NEXT_PUBLIC_WHATSAPP_VENDAS
 RUN npm run build
 
 # output: "standalone" (next.config.ts) empacota só o necessário pra rodar

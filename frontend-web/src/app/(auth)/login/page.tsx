@@ -3,9 +3,11 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { IdCard } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { mascararCpf, somenteDigitos } from "@/lib/mascaras";
-import { Button, Card, ErrorText, Field, Input, Label } from "@/components/ui";
+import { Button, ErrorText, Field, Input, Label } from "@/components/ui";
+import { CampoSenha } from "@/components/campo-senha";
 
 export default function LoginPage() {
   const router = useRouter();
@@ -23,17 +25,16 @@ export default function LoginPage() {
       router.push("/dashboard");
     } catch (e) {
       setErro(e instanceof ApiError ? e.message : "Não consegui entrar agora. Tenta de novo.");
-    } finally {
       setCarregando(false);
     }
   }
 
   return (
-    <Card>
-      <h1 className="font-heading text-2xl font-semibold">Entrar</h1>
-      <p className="mt-1 text-sm text-muted">Acompanhe sua glicemia e seus relatórios.</p>
+    <div>
+      <h1 className="font-heading text-[28px] font-bold tracking-tight">Bem-vindo de volta</h1>
+      <p className="mt-1.5 text-[15px] text-muted">Entre para acompanhar sua glicemia e seus relatórios.</p>
 
-      <form onSubmit={aoEnviar} className="mt-6 flex flex-col gap-4">
+      <form onSubmit={aoEnviar} className="mt-8 flex flex-col gap-5">
         <Field>
           <Label htmlFor="cpf">CPF</Label>
           <Input
@@ -43,16 +44,22 @@ export default function LoginPage() {
             placeholder="000.000.000-00"
             value={cpf}
             onChange={(e) => setCpf(mascararCpf(e.target.value))}
+            icone={<IdCard size={17} />}
             required
           />
         </Field>
 
         <Field>
-          <Label htmlFor="senha">Senha</Label>
-          <Input
+          <div className="flex items-center justify-between">
+            <Label htmlFor="senha">Senha</Label>
+            <Link href="/criar-senha" className="text-sm font-medium text-primary hover:underline">
+              Esqueci a senha
+            </Link>
+          </div>
+          <CampoSenha
             id="senha"
-            type="password"
             autoComplete="current-password"
+            placeholder="Sua senha"
             value={senha}
             onChange={(e) => setSenha(e.target.value)}
             required
@@ -61,17 +68,17 @@ export default function LoginPage() {
 
         <ErrorText>{erro}</ErrorText>
 
-        <Button type="submit" disabled={carregando}>
+        <Button type="submit" carregando={carregando} className="mt-1 w-full py-3">
           {carregando ? "Entrando..." : "Entrar"}
         </Button>
       </form>
 
-      <p className="mt-6 text-center text-sm text-muted">
-        Primeiro acesso ou esqueceu a senha?{" "}
-        <Link href="/criar-senha" className="font-medium text-primary hover:underline">
-          Criar senha
+      <p className="mt-8 text-center text-sm text-muted">
+        Ainda não tem senha?{" "}
+        <Link href="/criar-senha" className="font-semibold text-primary hover:underline">
+          Fazer primeiro acesso
         </Link>
       </p>
-    </Card>
+    </div>
   );
 }

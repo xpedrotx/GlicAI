@@ -2,44 +2,51 @@
 
 /*
  * Identidade visual do GlicAI — mesma paleta usada no PDF de exportação
- * (app/services/exportacao.py no backend): Âmbar Glic e Coral Vida como
- * cores primárias/energia, Petróleo pro texto, Areia de fundo. Verde e
- * Vermelho ficam RESERVADOS pro significado clínico real (glicemia dentro/
- * fora da meta) — nunca usados de forma decorativa em botões, links etc.
+ * (app/services/exportacao.py no backend): Coral Vida como cor primária,
+ * Âmbar Glic de apoio, Petróleo pro texto e superfícies escuras, Areia de
+ * fundo. Verde e Vermelho ficam RESERVADOS pro significado clínico real
+ * (glicemia dentro/fora da meta) — nunca usados de forma decorativa em
+ * botões, links etc.
  */
 :root {
-  --areia: #fbf6ef;
+  --areia: #fbf7f2;
   --petroleo: #1b3a4b;
+  --petroleo-escuro: #10252f;
   --coral: #ff6f5e;
   --ambar: #f5a623;
-  --verde: #4caf7d;
-  --vermelho: #e85d5d;
+  --verde: #3fa672;
+  --vermelho: #e5484d;
 
   --background: var(--areia);
   --foreground: var(--petroleo);
   --card: #ffffff;
-  --border: color-mix(in srgb, var(--petroleo) 12%, transparent);
+  --surface: color-mix(in srgb, var(--petroleo) 4%, var(--areia));
+  --border: color-mix(in srgb, var(--petroleo) 11%, transparent);
   --primary: var(--coral);
   --primary-foreground: #ffffff;
   --accent: var(--ambar);
-  --muted: color-mix(in srgb, var(--petroleo) 55%, transparent);
+  --muted: color-mix(in srgb, var(--petroleo) 60%, transparent);
+  --sombra: 0 1px 2px rgba(27, 58, 75, 0.04), 0 8px 24px rgba(27, 58, 75, 0.06);
 }
 
 :root[data-theme="dark"] {
-  --background: #122129;
-  --foreground: #f5efe4;
-  --card: #182a33;
-  --border: color-mix(in srgb, #ffffff 12%, transparent);
+  --background: #0e1d24;
+  --foreground: #f3eee6;
+  --card: #152831;
+  --surface: #12232b;
+  --border: color-mix(in srgb, #ffffff 10%, transparent);
   --primary: var(--coral);
   --primary-foreground: #ffffff;
   --accent: var(--ambar);
-  --muted: color-mix(in srgb, #ffffff 60%, transparent);
+  --muted: color-mix(in srgb, #ffffff 58%, transparent);
+  --sombra: 0 1px 2px rgba(0, 0, 0, 0.2), 0 8px 24px rgba(0, 0, 0, 0.25);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
+  --color-surface: var(--surface);
   --color-border: var(--border);
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
@@ -47,12 +54,48 @@
   --color-muted: var(--muted);
   --color-verde: var(--verde);
   --color-vermelho: var(--vermelho);
-  --font-heading: var(--font-fraunces);
+  --color-petroleo: var(--petroleo);
+  --color-petroleo-escuro: var(--petroleo-escuro);
+  --font-heading: var(--font-jakarta);
   --font-sans: var(--font-inter);
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
   transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* Fundo sutil com grade pontilhada — usado no hero e no painel de login */
+.fundo-pontilhado {
+  background-image: radial-gradient(color-mix(in srgb, var(--foreground) 9%, transparent) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+@keyframes surgir {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.surgir {
+  animation: surgir 0.5s ease both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .surgir {
+    animation: none;
+  }
+  html {
+    scroll-behavior: auto;
+  }
 }

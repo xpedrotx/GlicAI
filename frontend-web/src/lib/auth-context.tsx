@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, useState } from "react";
+import { LoaderCircle } from "lucide-react";
 import { api } from "./api";
 
 type Usuario = { nome: string | null; telefone: string };
@@ -25,7 +26,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [router]);
 
   if (carregando || !usuario) {
-    return null;
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <LoaderCircle size={28} className="animate-spin text-primary" aria-label="Carregando" />
+      </div>
+    );
   }
 
   return <AuthContext.Provider value={usuario}>{children}</AuthContext.Provider>;

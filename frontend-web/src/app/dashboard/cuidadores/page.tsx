@@ -1,16 +1,19 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Package, Plus, RefreshCw, Send, Trash2, Users } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import type { Convite, Cuidador, ItemEstoque } from "@/lib/types";
-import { Button, Card, ErrorText, Field, Input, Label } from "@/components/ui";
+import { Button, Card, CardTitulo, ErrorText, Field, Input, Label, PageHeader, Select, Skeleton, Vazio } from "@/components/ui";
 
 export default function CuidadoresPage() {
   return (
-    <div className="flex flex-col gap-8">
-      <h1 className="font-heading text-2xl font-semibold">Cuidadores e estoque</h1>
-      <SecaoCuidadores />
-      <SecaoEstoque />
+    <div className="flex flex-col gap-6">
+      <PageHeader titulo="Cuidadores e estoque" descricao="Quem acompanha você e os insumos que o GlicAI controla." />
+      <div className="grid items-start gap-6 lg:grid-cols-2">
+        <SecaoCuidadores />
+        <SecaoEstoque />
+      </div>
     </div>
   );
 }
@@ -45,6 +48,7 @@ function SecaoCuidadores() {
   }
 
   async function remover(nome: string) {
+    if (!window.confirm(`Remover ${nome}? Essa pessoa deixa de receber seus alertas.`)) return;
     setErro("");
     try {
       await api.removerCuidador(nome);
@@ -55,52 +59,68 @@ function SecaoCuidadores() {
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <h2 className="font-heading text-lg font-semibold">👨‍👩‍👧 Quem acompanha você</h2>
+    <Card>
+      <CardTitulo
+        icone={<Users size={18} />}
+        titulo="Quem acompanha você"
+        descricao="Recebem aviso quando sua glicemia sai da faixa segura."
+      />
 
-      <Card>
-        {lista === null ? (
-          <p className="text-sm text-muted">Carregando...</p>
-        ) : lista.length === 0 ? (
-          <p className="text-sm text-muted">Ninguém acompanhando ainda.</p>
+      {lista === null ? (
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-12" />
+          <Skeleton className="h-12" />
+        </div>
+      ) : lista.length === 0 ? (
+        <Vazio icone={<Users size={20} />} titulo="Ninguém acompanhando ainda" texto="Convide um familiar ou responsável." />
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {lista.map((c) => (
+            <li
+              key={c.nome}
+              className="flex items-center justify-between gap-3 rounded-xl border border-border px-3.5 py-2.5 text-sm"
+            >
+              <span className="flex items-center gap-3">
+                <span className="flex h-8 w-8 items-center justify-center rounded-full bg-surface text-xs font-bold">
+                  {c.nome.charAt(0).toUpperCase()}
+                </span>
+                <span className="font-medium">{c.nome}</span>
+              </span>
+              <button
+                type="button"
+                onClick={() => remover(c.nome)}
+                aria-label={`Remover ${c.nome}`}
+                className="flex h-8 w-8 items-center justify-center rounded-lg text-muted transition hover:bg-vermelho/10 hover:text-vermelho"
+              >
+                <Trash2 size={16} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="mt-5 border-t border-border pt-5">
+        {convite ? (
+          <div className="rounded-xl border border-primary/25 bg-primary/[0.06] p-4 text-sm">
+            <p className="text-muted">Código de convite</p>
+            <p className="mt-1 font-heading text-3xl font-extrabold tracking-[0.2em] text-primary">{convite.codigo}</p>
+            <p className="mt-3 leading-relaxed text-foreground/85">
+              Envie esse código para quem vai acompanhar você. A pessoa manda para o GlicAI no WhatsApp:{" "}
+              <span className="font-semibold">vincular {convite.codigo} &lt;nome dela&gt;</span>
+            </p>
+            <p className="mt-2 text-xs text-muted">Vale por {convite.minutos_validade} minutos.</p>
+          </div>
         ) : (
-          <ul className="flex flex-col gap-2.5">
-            {lista.map((c) => (
-              <li key={c.nome} className="flex items-center justify-between text-sm">
-                <span>{c.nome}</span>
-                <button
-                  type="button"
-                  onClick={() => remover(c.nome)}
-                  className="text-sm font-medium text-primary hover:underline"
-                >
-                  Remover
-                </button>
-              </li>
-            ))}
-          </ul>
+          <Button onClick={convidar} carregando={carregandoConvite}>
+            {!carregandoConvite && <Send size={16} />}
+            {carregandoConvite ? "Gerando..." : "Convidar alguém"}
+          </Button>
         )}
-
-        <div className="mt-4 border-t border-border pt-4">
-          {convite ? (
-            <div className="rounded-lg border border-border bg-background/60 px-4 py-3 text-sm">
-              <p>
-                Código: <span className="font-heading text-lg font-semibold text-primary">{convite.codigo}</span>
-              </p>
-              <p className="mt-1 text-foreground/80">
-                Manda esse código pra quem você quer que acompanhe sua glicemia. Ela(e) deve mandar pro WhatsApp:{" "}
-                <span className="font-medium">vincular {convite.codigo} &lt;nome dela(e)&gt;</span>
-              </p>
-              <p className="mt-1 text-muted">Vale por {convite.minutos_validade} minutos.</p>
-            </div>
-          ) : (
-            <Button onClick={convidar} disabled={carregandoConvite} className="w-auto px-4">
-              {carregandoConvite ? "Gerando..." : "+ Convidar alguém"}
-            </Button>
-          )}
+        <div className="mt-3">
           <ErrorText>{erro}</ErrorText>
         </div>
-      </Card>
-    </div>
+      </div>
+    </Card>
   );
 }
 
@@ -132,7 +152,7 @@ function SecaoEstoque() {
     setErro("");
     const numero = Number(quantidade);
     if (!numero || numero <= 0) {
-      setErro("Manda uma quantidade válida.");
+      setErro("Informe uma quantidade válida.");
       return;
     }
     setSalvando(true);
@@ -159,65 +179,80 @@ function SecaoEstoque() {
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <h2 className="font-heading text-lg font-semibold">💊 Estoque de insumos</h2>
+    <Card>
+      <CardTitulo
+        icone={<Package size={18} />}
+        titulo="Estoque de insumos"
+        descricao="Descontado a cada registro. Você é avisado antes de acabar."
+      />
 
-      <Card>
-        {itens === null ? (
-          <p className="text-sm text-muted">Carregando...</p>
-        ) : itens.length === 0 ? (
-          <p className="text-sm text-muted">Nada configurado ainda.</p>
-        ) : (
-          <div className="flex flex-col gap-4">
-            {itens.map((item) => {
-              const baixo = item.quantidade_atual <= item.limite_alerta;
-              const pct = Math.min(100, Math.round((item.quantidade_atual / item.quantidade_por_reposicao) * 100));
-              return (
-                <div key={item.tipo}>
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="font-medium">
-                      {baixo ? "🔴" : "🟢"} {item.label}
-                    </span>
-                    <span className={baixo ? "font-semibold text-primary" : "font-medium"}>
-                      {item.quantidade_atual.toFixed(0)} / {item.quantidade_por_reposicao.toFixed(0)}
-                    </span>
+      {itens === null ? (
+        <div className="flex flex-col gap-2">
+          <Skeleton className="h-20" />
+          <Skeleton className="h-20" />
+        </div>
+      ) : itens.length === 0 ? (
+        <Vazio icone={<Package size={20} />} titulo="Nada configurado ainda" texto="Configure insulina ou fitas abaixo." />
+      ) : (
+        <div className="flex flex-col gap-3">
+          {itens.map((item) => {
+            const baixo = item.quantidade_atual <= item.limite_alerta;
+            const pct = Math.min(100, Math.round((item.quantidade_atual / item.quantidade_por_reposicao) * 100));
+            const unidade = item.tipo === "insulina" ? "U" : "";
+            return (
+              <div key={item.tipo} className="rounded-xl border border-border p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold">{item.label}</p>
+                    <p className="mt-0.5 text-xs text-muted">
+                      {baixo ? "Acabando — hora de repor" : `Aviso abaixo de ${item.limite_alerta.toFixed(0)}${unidade}`}
+                    </p>
                   </div>
-                  <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-border">
-                    <div
-                      className="h-full rounded-full transition-all"
-                      style={{ width: `${pct}%`, background: baixo ? "var(--vermelho)" : "var(--verde)" }}
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => reabastecer(item)}
-                    className="mt-1.5 text-sm font-medium text-primary hover:underline"
-                  >
-                    Reabastecer
-                  </button>
+                  <p className="text-right">
+                    <span className="font-heading text-xl font-bold" style={baixo ? { color: "var(--vermelho)" } : undefined}>
+                      {item.quantidade_atual.toFixed(0)}
+                      {unidade}
+                    </span>
+                    <span className="text-sm text-muted">
+                      {" "}
+                      / {item.quantidade_por_reposicao.toFixed(0)}
+                      {unidade}
+                    </span>
+                  </p>
                 </div>
-              );
-            })}
-          </div>
-        )}
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-foreground/[0.07]">
+                  <div
+                    className="h-full rounded-full transition-all"
+                    style={{ width: `${pct}%`, background: baixo ? "var(--vermelho)" : "var(--verde)" }}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => reabastecer(item)}
+                  className="mt-3 inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+                >
+                  <RefreshCw size={14} /> Reabastecer ({item.quantidade_por_reposicao.toFixed(0)}
+                  {unidade})
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
-        <div className="mt-4 border-t border-border pt-4">
-          {mostrarForm ? (
-            <form onSubmit={configurar} className="flex flex-col gap-3">
+      <div className="mt-5 border-t border-border pt-5">
+        {mostrarForm ? (
+          <form onSubmit={configurar} className="flex flex-col gap-4">
+            <div className="grid gap-4 sm:grid-cols-2">
               <Field>
                 <Label htmlFor="tipo">Tipo</Label>
-                <select
-                  id="tipo"
-                  value={tipo}
-                  onChange={(e) => setTipo(e.target.value)}
-                  className="w-full rounded-lg border border-border bg-background px-3.5 py-2.5 text-[15px] text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/25"
-                >
+                <Select id="tipo" value={tipo} onChange={(e) => setTipo(e.target.value)}>
                   {TIPOS_DISPONIVEIS.map((t) => (
                     <option key={t.valor} value={t.valor}>
                       {t.rotulo}
                     </option>
                   ))}
-                </select>
+                </Select>
               </Field>
               <Field>
                 <Label htmlFor="quantidade">Quantidade por reposição</Label>
@@ -226,26 +261,28 @@ function SecaoEstoque() {
                   inputMode="numeric"
                   value={quantidade}
                   onChange={(e) => setQuantidade(e.target.value)}
-                  placeholder="300"
+                  placeholder={tipo === "insulina" ? "300" : "50"}
                 />
               </Field>
-              <div className="flex gap-2">
-                <Button type="submit" disabled={salvando} className="w-auto px-4">
-                  {salvando ? "Salvando..." : "Salvar"}
-                </Button>
-                <Button type="button" variant="ghost" onClick={() => setMostrarForm(false)} className="w-auto px-4">
-                  Cancelar
-                </Button>
-              </div>
-            </form>
-          ) : (
-            <Button onClick={() => setMostrarForm(true)} className="w-auto px-4">
-              + Configurar estoque
-            </Button>
-          )}
+            </div>
+            <div className="flex gap-2">
+              <Button type="submit" carregando={salvando}>
+                {salvando ? "Salvando..." : "Salvar"}
+              </Button>
+              <Button type="button" variant="ghost" onClick={() => setMostrarForm(false)}>
+                Cancelar
+              </Button>
+            </div>
+          </form>
+        ) : (
+          <Button variant="ghost" onClick={() => setMostrarForm(true)}>
+            <Plus size={16} /> Configurar estoque
+          </Button>
+        )}
+        <div className="mt-3">
           <ErrorText>{erro}</ErrorText>
         </div>
-      </Card>
-    </div>
+      </div>
+    </Card>
   );
 }

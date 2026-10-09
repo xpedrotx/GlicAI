@@ -1,9 +1,11 @@
 "use client";
 
 import {
+  CartesianGrid,
   Label,
   Line,
   LineChart,
+  ReferenceArea,
   ReferenceLine,
   ResponsiveContainer,
   Tooltip,
@@ -36,7 +38,7 @@ function DotColorido(props: {
   const { cx, cy, payload, perfil } = props;
   if (cx == null || cy == null || !payload) return null;
   const { cor } = classificarGlicemia(payload.valor, perfil.limite_baixo, perfil.meta_glicemia, perfil.limite_alto);
-  return <circle cx={cx} cy={cy} r={3} style={{ fill: corParaCss(cor) }} stroke="var(--card)" strokeWidth={1} />;
+  return <circle cx={cx} cy={cy} r={3.5} style={{ fill: corParaCss(cor) }} stroke="var(--card)" strokeWidth={1} />;
 }
 
 function TooltipPersonalizado({
@@ -51,7 +53,7 @@ function TooltipPersonalizado({
   if (!active || !payload?.length) return null;
   const ponto = payload[0].payload;
   return (
-    <div className="rounded-lg border border-border bg-card px-3 py-2 text-sm shadow-md">
+    <div className="rounded-xl border border-border bg-card px-3 py-2 text-sm shadow-lg">
       <p className="font-semibold">{ponto.valor} mg/dL</p>
       <p className="text-muted">{formatarHorario(ponto.horario, timezone)}</p>
     </div>
@@ -97,17 +99,19 @@ export function TrendChart({
                 type="number"
                 domain={["dataMin", "dataMax"]}
                 tickFormatter={(ts: number) => formatarData(new Date(ts).toISOString(), timezone)}
-                stroke="var(--muted)"
+                stroke="var(--muted)" axisLine={false} tickLine={false}
                 fontSize={12}
                 tickMargin={8}
               />
               <YAxis
                 domain={[valorMin, valorMax]}
-                stroke="var(--muted)"
+                stroke="var(--muted)" axisLine={false} tickLine={false}
                 fontSize={12}
                 width={44}
                 tickMargin={6}
               />
+              <CartesianGrid vertical={false} stroke="var(--border)" />
+              <ReferenceArea y1={perfil.limite_baixo} y2={perfil.limite_alto} fill="var(--verde)" fillOpacity={0.07} />
               <Tooltip content={<TooltipPersonalizado timezone={timezone} />} />
 
               <ReferenceLine y={perfil.limite_alto} stroke="var(--vermelho)" strokeDasharray="4 4" strokeOpacity={0.7}>

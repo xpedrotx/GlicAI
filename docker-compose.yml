@@ -16,7 +16,10 @@ services:
       - wwebjs_auth:/app/.wwebjs_auth
 
   frontend-web:
-    build: ./frontend-web
+    build:
+      context: ./frontend-web
+      args:
+        NEXT_PUBLIC_WHATSAPP_VENDAS: ${WHATSAPP_VENDAS:-}
     restart: unless-stopped
     depends_on:
       - backend-python
