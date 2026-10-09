@@ -289,6 +289,65 @@ export default function Home() {
           </div>
         </section>
 
+        {/* Para médicos */}
+        <section id="medicos" className="scroll-mt-20 border-t border-border bg-surface py-20">
+          <div className="mx-auto grid max-w-6xl items-center gap-10 px-5 lg:grid-cols-2">
+            <div>
+              <p className="text-sm font-semibold uppercase tracking-wider text-primary">Para médicos</p>
+              <h2 className="mt-3 font-heading text-3xl font-extrabold tracking-tight sm:text-4xl">
+                Chegue na consulta já sabendo como foi o mês do paciente
+              </h2>
+              <p className="mt-4 text-lg leading-relaxed text-muted">
+                Crie sua conta, passe o seu código de vinculação e acompanhe glicemias, doses e relatórios de quem
+                autorizar — em um painel só, de qualquer lugar.
+              </p>
+              <div className="mt-7 flex flex-wrap gap-3">
+                <Link
+                  href="/medico/cadastro"
+                  className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-3 text-[15px] font-semibold text-primary-foreground shadow-lg shadow-primary/30 transition hover:brightness-105"
+                >
+                  Criar conta de médico <ArrowRight size={17} />
+                </Link>
+                <Link
+                  href="/medico/entrar"
+                  className="inline-flex items-center rounded-xl border border-border bg-card px-5 py-3 text-[15px] font-semibold transition hover:border-primary/50 hover:text-primary"
+                >
+                  Já tenho conta
+                </Link>
+              </div>
+            </div>
+            <ul className="flex flex-col gap-4">
+              {[
+                {
+                  icone: Users,
+                  titulo: "O paciente é quem libera",
+                  texto: "Ele digita o seu código e confirma. Pode revogar o acesso quando quiser.",
+                },
+                {
+                  icone: ChartLine,
+                  titulo: "Tendências e relatórios",
+                  texto: "Tempo no alvo, hipos e hipers, HbA1c estimada, padrões por horário e doses de insulina.",
+                },
+                {
+                  icone: ShieldCheck,
+                  titulo: "Só leitura, sem dados pessoais",
+                  texto: "Você não altera nada e nunca vê telefone nem CPF do paciente.",
+                },
+              ].map((i) => (
+                <li key={i.titulo} className="flex gap-4 rounded-2xl border border-border bg-card p-5 shadow-[var(--sombra)]">
+                  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+                    <i.icone size={21} />
+                  </span>
+                  <div>
+                    <p className="font-heading font-bold">{i.titulo}</p>
+                    <p className="mt-1 text-[15px] leading-relaxed text-muted">{i.texto}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+
         {/* Planos */}
         <section id="planos" className="scroll-mt-20 border-t border-border py-20">
           <div className="mx-auto max-w-6xl px-5">
@@ -433,6 +492,15 @@ export default function Home() {
               <a href="#seguranca" className="text-muted hover:text-foreground">
                 Segurança
               </a>
+            </div>
+            <div className="flex flex-col gap-2">
+              <p className="font-semibold">Médicos</p>
+              <Link href="/medico/entrar" className="text-muted hover:text-foreground">
+                Painel do médico
+              </Link>
+              <Link href="/medico/cadastro" className="text-muted hover:text-foreground">
+                Criar conta
+              </Link>
             </div>
             <div className="flex flex-col gap-2">
               <p className="font-semibold">Conta</p>

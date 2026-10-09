@@ -49,3 +49,14 @@ export function formatarHorario(iso: string, timezone: string): string {
 export function formatarData(iso: string, timezone: string): string {
   return new Date(iso).toLocaleString("pt-BR", { timeZone: timezone, day: "2-digit", month: "2-digit" });
 }
+
+/** "há 5 min", "há 3 h", "há 2 dias" — `agoraMs` vem de um relógio do componente (não chamar Date.now() no render). */
+export function tempoDesde(iso: string, agoraMs: number): string {
+  const minutos = Math.max(0, Math.round((agoraMs - new Date(iso).getTime()) / 60000));
+  if (minutos < 1) return "agora";
+  if (minutos < 60) return `há ${minutos} min`;
+  const horas = Math.round(minutos / 60);
+  if (horas < 24) return `há ${horas} h`;
+  const dias = Math.round(horas / 24);
+  return `há ${dias} ${dias === 1 ? "dia" : "dias"}`;
+}

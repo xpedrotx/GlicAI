@@ -6,7 +6,7 @@
  * o cookie httpOnly de sessão (glicai_sessao) seja enviado nas chamadas.
  */
 
-import type { Convite, Cuidador, HbA1c, Historico, ItemEstoque, Padroes, PerfilCompleto, Plano, Relatorio, ResultadoAssinatura } from "./types";
+import type { Convite, Cuidador, HbA1c, Historico, ItemEstoque, Padroes, PerfilCompleto, MedicoEu, MedicoVinculado, Plano, Relatorio, ResultadoAssinatura, ResultadoVinculo, ResumoPaciente } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -106,4 +106,42 @@ export const api = {
     }),
 
   abrirPortal: () => chamar<{ url: string }>("/dashboard/plano/portal", { method: "POST" }),
+  // --- Lado do paciente: médicos que acompanham ---
+  medicosVinculados: () => chamar<{ medicos: MedicoVinculado[] }>("/dashboard/medicos"),
+
+  vincularMedico: (codigo: string, confirmar: boolean) =>
+    chamar<ResultadoVinculo>("/dashboard/medicos/vincular", {
+      method: "POST",
+      body: JSON.stringify({ codigo, confirmar }),
+    }),
+
+  removerMedico: (id: string) => chamar<{ status: string }>(`/dashboard/medicos/${id}`, { method: "DELETE" }),
+
+  // --- Painel do médico ---
+  medicoCadastro: (dados: { nome: string; email: string; crm: string; uf: string; senha: string }) =>
+    chamar<{ status: string }>("/medico/cadastro", { method: "POST", body: JSON.stringify(dados) }),
+
+  medicoLogin: (email: string, senha: string) =>
+    chamar<{ status: string }>("/medico/login", { method: "POST", body: JSON.stringify({ email, senha }) }),
+
+  medicoLogout: () => chamar<{ status: string }>("/medico/logout", { method: "POST" }),
+
+  medicoEu: () => chamar<MedicoEu>("/medico/me"),
+
+  medicoPacientes: () => chamar<{ pacientes: ResumoPaciente[] }>("/medico/pacientes"),
+
+  medicoPaciente: (id: string) => chamar<ResumoPaciente>(`/medico/pacientes/${id}`),
+
+  medicoDesvincular: (id: string) => chamar<{ status: string }>(`/medico/pacientes/${id}`, { method: "DELETE" }),
+
+  medicoHistorico: (id: string, dias: number) => chamar<Historico>(`/medico/pacientes/${id}/historico?dias=${dias}`),
+
+  medicoPerfil: (id: string) => chamar<PerfilCompleto>(`/medico/pacientes/${id}/perfil`),
+
+  medicoRelatorio: (id: string, periodo: "semana" | "mes") =>
+    chamar<Relatorio>(`/medico/pacientes/${id}/relatorio?periodo=${periodo}`),
+
+  medicoHba1c: (id: string, dias: number) => chamar<HbA1c>(`/medico/pacientes/${id}/hba1c?dias=${dias}`),
+
+  medicoPadroes: (id: string, dias: number) => chamar<Padroes>(`/medico/pacientes/${id}/padroes?dias=${dias}`),
 };

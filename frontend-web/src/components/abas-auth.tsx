@@ -3,16 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const ABAS = [
-  { href: "/login", rotulo: "Entrar" },
-  { href: "/criar-senha", rotulo: "Primeiro acesso" },
-];
+export type AbaAuth = { href: string; rotulo: string };
 
-export function AbasAuth() {
+export function AbasAuth({ abas }: { abas: AbaAuth[] }) {
   const pathname = usePathname();
   return (
     <nav className="mb-8 grid grid-cols-2 gap-1 rounded-xl border border-border bg-surface p-1" aria-label="Acesso">
-      {ABAS.map((a) => {
+      {abas.map((a) => {
         const ativa = pathname === a.href;
         return (
           <Link

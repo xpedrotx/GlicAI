@@ -33,7 +33,7 @@ export function BannerPlano() {
         <span>
           {teste ? (
             <>
-              <span className="font-semibold">Teste grátis:</span> {dias === 1 ? "termina hoje" : `${dias} dias restantes`}
+              <span className="font-semibold">Teste grátis:</span> {plano.dias_restantes_teste == null ? "ativo" : dias === 1 ? "termina hoje" : `${dias} dias restantes`}
             </>
           ) : (
             <>

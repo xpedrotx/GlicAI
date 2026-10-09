@@ -42,6 +42,7 @@ _COMANDOS_DISPONIVEIS = """
 - estoque reabastecer <insulina|fita> [quantidade] — registra que o paciente repôs insulina ou fitas de dextro. Ex: "estoque reabastecer fita"
 - criar_senha — gera um código de acesso ao site de acompanhamento
 - plano — mostra o plano atual (teste grátis, gratuito ou Pro) e como assinar
+- medico <código> — vincula o médico do paciente pelo código dele (ex: DR-K7M2QX); "medico listar" mostra quem acompanha; "medico remover <nome>" tira o acesso
 - apagar_glicemia [valor] — apaga uma glicemia registrada por engano: sem valor, a última; com valor, a mais recente com esse valor. Ex: "apagar_glicemia 6"
 - apagar_dose [dose] — apaga uma dose de insulina registrada por engano: sem valor, a última; com valor, a mais recente com essa dose. Ex: "apagar_dose 8"
 - corrigir_glicemia <valor> [jejum|pre_refeicao|pos_prandial|correcao] — troca a última glicemia pelo valor certo. Ex: "corrigir_glicemia 116"

@@ -108,7 +108,7 @@ export function Legenda() {
   );
 }
 
-function useAgora(): number {
+export function useAgora(): number {
   // relógio de minuto em minuto, pra linha "agora" do gráfico de hoje
   return useSyncExternalStore(
     (avisar) => {

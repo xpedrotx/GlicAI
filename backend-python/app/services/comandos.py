@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from app.services import auth_web, confirmacoes, correcao, cuidadores, estoque, ia, planos, remedicao
+from app.services import auth_web, confirmacoes, correcao, cuidadores, estoque, ia, medicos, planos, remedicao
 from app.services.alertas import checar_alerta_glicemia
 from app.services.bolus import (
     calcular_correcao,
@@ -233,6 +233,8 @@ def _comando_e_seguro(comando_texto: str) -> bool:
         return True
     if comando == "estoque" and len(partes) == 1:
         return True
+    if comando in ("medico", "medicos") and (len(partes) == 1 or remover_acentos(partes[1].lower()) == "listar"):
+        return True
     if (
         comando == "estoque" and len(partes) == 3
         and remover_acentos(partes[1].lower()) in ("reabastecer", "repor")
@@ -273,6 +275,10 @@ def _descrever_comando(comando_texto: str) -> str:
         return f"{args[0]} lembrete" + (f" ({' '.join(args[1:])})" if len(args) > 1 else "")
     if comando == "cuidador" and args:
         return f"{args[0]} cuidador" + (f" ({' '.join(args[1:])})" if len(args) > 1 else "")
+    if comando in ("medico", "medicos") and args:
+        if remover_acentos(args[0].lower()) in ("remover", "desvincular"):
+            return "remover o acesso do seu médico (" + " ".join(args[1:]) + ")"
+        return "vincular seu médico com o código " + " ".join(args)
     if comando == "estoque" and args:
         return f"{args[0]} o estoque" + (f" ({' '.join(args[1:])})" if len(args) > 1 else "")
     return comando_texto
@@ -499,6 +505,10 @@ async def processar_comando(usuario: dict, mensagem: str) -> str:
             return auth_web.gerar_codigo_login(usuario["id"])
         if comando in ("plano", "assinatura", "assinar"):
             return planos.mensagem_plano(usuario)
+        if comando in ("medico", "medicos"):
+            return await _medico(usuario, partes[1:])
+        if comando == "medico_confirmar" and len(partes) > 1:
+            return await _medico_confirmar(usuario, " ".join(partes[1:]))
         if comando == "apagar_glicemia":
             return await _pedir_confirmacao_apagar_glicemia(usuario, partes[1:])
         if comando == "apagar_dose":
@@ -895,6 +905,69 @@ async def _cuidador(usuario: dict, args: list[str]) -> str:
         return await cuidadores.remover_cuidador(usuario["id"], " ".join(args[1:]))
 
     return "Manda: *cuidador convidar*, *cuidador listar* ou *cuidador remover <nome>*"
+
+
+_USO_MEDICO = (
+    "Manda *medico <código>* pra vincular o seu médico (o código é dele, ex: *medico DR-K7M2QX*), "
+    "*medico listar* pra ver quem acompanha você ou *medico remover <nome>* pra tirar o acesso."
+)
+
+
+async def _medico(usuario: dict, args: list[str]) -> str:
+    acao = remover_acentos(args[0].lower()) if args else "listar"
+
+    if acao == "listar":
+        vinculados = await medicos.medicos_do_paciente(usuario["id"])
+        if not vinculados:
+            return (
+                "Você ainda não vinculou nenhum médico.\n\n"
+                "Peça a ele(a) o *código de vinculação* (fica no painel do médico em "
+                f"{planos.site_url()}/medico) e me mande: *medico DR-XXXXXX*"
+            )
+        linhas = ["👨‍⚕️ *Médicos que acompanham você*", ""]
+        linhas += [f"• {medicos.descricao_medico(m)}" for m in vinculados]
+        linhas += ["", "Pra tirar o acesso de alguém: *medico remover <nome>*"]
+        return "\n".join(linhas)
+
+    if acao in ("remover", "desvincular"):
+        nome = " ".join(args[1:]).strip().lower()
+        if not nome:
+            return _USO_MEDICO
+        achados = [m for m in await medicos.medicos_do_paciente(usuario["id"]) if nome in m["nome"].lower()]
+        if not achados:
+            return f'Não achei "{nome}" entre os seus médicos. Manda *medico listar* pra ver a lista.'
+        if len(achados) > 1:
+            return "Achei mais de um médico com esse nome — manda o nome completo."
+        await medicos.desvincular(achados[0]["id"], usuario["id"])
+        return f"✅ Pronto, o(a) Dr(a). {achados[0]['nome']} não vê mais seus dados."
+
+    # "medico vincular DR-XXXXXX" ou direto "medico DR-XXXXXX"
+    codigo = args[1:] if acao == "vincular" else args
+    if not codigo:
+        return _USO_MEDICO
+    try:
+        medico = await medicos.buscar_por_codigo(" ".join(codigo), usuario["id"])
+    except (medicos.ErroMedico, auth_web.ErroAutenticacao) as erro:
+        return str(erro)
+
+    # O paciente confere QUEM é antes de liberar os dados — o código pode ter sido digitado errado
+    _guardar_confirmacao_pendente(usuario, f"medico_confirmar {medico['codigo_vinculo']}")
+    return (
+        f"Vincular *{medicos.descricao_medico(medico)}*?\n\n"
+        "Ele(a) passa a ver suas glicemias, doses e o seu perfil de dose (nunca seu telefone nem CPF). "
+        "Você pode tirar o acesso quando quiser com *medico remover*.\n\n"
+        "Responde *sim* pra vincular, ou *não* pra cancelar."
+    )
+
+
+async def _medico_confirmar(usuario: dict, codigo: str) -> str:
+    try:
+        medico = await medicos.buscar_por_codigo(codigo, usuario["id"])
+    except (medicos.ErroMedico, auth_web.ErroAutenticacao) as erro:
+        return str(erro)
+    if not await medicos.vincular(usuario["id"], medico):
+        return f"Você já está vinculado ao(à) {medicos.descricao_medico(medico)}."
+    return f"✅ Vinculado! O(A) {medicos.descricao_medico(medico)} agora acompanha suas glicemias."
 
 
 _CAMPOS_EDITAVEIS = {"meta": "meta_glicemia", "limite_baixo": "limite_baixo", "limite_alto": "limite_alto", "fator": "fator_sensibilidade"}
@@ -1306,6 +1379,7 @@ def _ajuda() -> str:
         "• perfil · basal · editar meta 110\n"
         "• lembrete · estoque · cuidador\n"
         "• plano _(assinatura GlicAI Pro)_\n"
+        "• medico DR-XXXXXX _(vincular seu médico)_\n"
         "• criar senha _(acesso ao site)_\n"
         "• excluir conta\n\n"
         "_Antes de registrar glicemia ou dose a partir de uma frase, eu sempre confirmo com você._"

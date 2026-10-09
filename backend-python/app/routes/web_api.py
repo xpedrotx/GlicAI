@@ -4,10 +4,12 @@ from pydantic import BaseModel
 
 from app.config import settings
 from app.routes.web_auth import usuario_atual
+from app.services import auth_web
 from app.services import cuidadores as cuidadores_service
 from app.services import estoque as estoque_service
-from app.services import hba1c, pagamentos, padroes, perfil as perfil_service, planos, relatorios
-from app.services.exportacao import DIAS_MAXIMO, DIAS_PADRAO, buscar_dados_historico
+from app.services import medicos as medicos_service
+from app.services import hba1c, pagamentos, padroes, perfil as perfil_service, planos, relatorios, visao_paciente
+from app.services.exportacao import DIAS_MAXIMO, DIAS_PADRAO
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -17,83 +19,15 @@ async def historico(
     dias: int = Query(DIAS_PADRAO, ge=1, le=DIAS_MAXIMO),
     usuario: dict = Depends(usuario_atual),
 ):
-    """
-    Mesmos dados que alimentam o PDF de exportação (buscar_dados_historico,
-    reaproveitado de exportacao.py), só que em JSON pro dashboard — a
-    classificação clínica (cor/seta por faixa) fica a cargo do front-end,
-    que já recebe meta/limite_baixo/limite_alto pra calcular igual.
-    """
-    dados = await buscar_dados_historico(usuario["id"], dias)
-    if dados is None:
-        return {"perfil": None, "timezone": None, "periodo": None, "glicemias": [], "bolus": []}
-
-    perfil = dados["perfil"]
-    return {
-        "perfil": {
-            "meta_glicemia": perfil["meta_glicemia"],
-            "limite_baixo": perfil["limite_baixo"],
-            "limite_alto": perfil["limite_alto"],
-        },
-        "timezone": dados["usuario"].get("timezone") or "America/Sao_Paulo",
-        "periodo": {
-            "inicio": dados["data_inicio"].isoformat(),
-            "fim": dados["data_fim"].isoformat(),
-        },
-        "glicemias": [
-            {"horario": g["horario"], "valor": g["valor"], "contexto": g.get("contexto")}
-            for g in dados["glicemias"]
-        ],
-        "bolus": [
-            {
-                "horario": b["horario"],
-                "carboidratos_g": b.get("carboidratos_g"),
-                "glicemia_referencia": b.get("glicemia_referencia"),
-                "dose_calculada": b.get("dose_calculada"),
-                "dose_aplicada": b.get("dose_aplicada"),
-            }
-            for b in dados["bolus"]
-        ],
-    }
+    return await visao_paciente.historico_json(usuario["id"], dias)
 
 
 @router.get("/perfil")
 async def obter_perfil(usuario: dict = Depends(usuario_atual)):
-    """Mesmo dado que _perfil()/_basal() mostram em texto no WhatsApp (comandos.py), estruturado pro dashboard."""
-    dados = await perfil_service.buscar_perfil_completo(usuario["id"])
+    dados = await visao_paciente.perfil_json(usuario["id"])
     if dados is None:
         raise HTTPException(status_code=404, detail="Ainda não achei seu perfil glicêmico.")
-
-    p = dados["perfil"]
-    return {
-        "nome": dados["nome"],
-        "meta_glicemia": p["meta_glicemia"],
-        "limite_baixo": p["limite_baixo"],
-        "limite_alto": p["limite_alto"],
-        "fator_sensibilidade": p["fator_sensibilidade"],
-        "tempo_insulina_ativa_horas": p.get("tempo_insulina_ativa_horas"),
-        "relacoes_ic": [
-            {
-                "periodo": r["periodo"],
-                "hora_inicio": str(r["hora_inicio"])[:5],
-                "hora_fim": str(r["hora_fim"])[:5],
-                "gramas_por_unidade": r["gramas_por_unidade"],
-            }
-            for r in dados["relacoes_ic"]
-        ],
-        "basal": [
-            {"horario": str(b["horario"])[:5], "dose": b["dose"], "tipo_insulina": b.get("tipo_insulina")}
-            for b in dados["basal"]
-        ],
-        "modificadores": [
-            {
-                "nome": m["nome"],
-                "tipo_ajuste": m["tipo_ajuste"],
-                "valor_ajuste": m["valor_ajuste"],
-                "ativo": m["ativo"],
-            }
-            for m in dados["modificadores"]
-        ],
-    }
+    return dados
 
 
 class AtualizarPerfilBody(BaseModel):
@@ -121,39 +55,9 @@ async def atualizar_perfil(body: AtualizarPerfilBody, usuario: dict = Depends(us
 
 @router.get("/relatorio")
 async def relatorio(periodo: str = Query("semana"), usuario: dict = Depends(usuario_atual)):
-    """Mesmos dados do resumo periódico mandado automaticamente no WhatsApp (relatorios.py), em JSON."""
     if periodo not in relatorios.DIAS_POR_PERIODO:
         raise HTTPException(status_code=400, detail="Período inválido. Use 'semana' ou 'mes'.")
-
-    dados = await relatorios.buscar_dados_relatorio(usuario["id"], periodo)
-    if dados is None:
-        return {"perfil": None}
-
-    valores = [g["valor"] for g in dados["glicemias"]]
-    limite_baixo = dados["perfil"]["limite_baixo"]
-    limite_alto = dados["perfil"]["limite_alto"]
-    na_faixa = sum(1 for v in valores if limite_baixo <= v <= limite_alto)
-    hipos = sum(1 for v in valores if v < limite_baixo)
-    hipers = sum(1 for v in valores if v > limite_alto)
-
-    dias_periodo = max(1, (dados["data_fim"] - dados["data_inicio"]).days)
-    total_insulina = sum(dados["doses_aplicadas"])
-
-    return {
-        "perfil": {"limite_baixo": limite_baixo, "limite_alto": limite_alto},
-        "periodo": periodo,
-        "data_inicio": dados["data_inicio"].isoformat(),
-        "data_fim": dados["data_fim"].isoformat(),
-        "num_medicoes": len(valores),
-        "media_glicemia": (sum(valores) / len(valores)) if valores else None,
-        "na_faixa_pct": round(100 * na_faixa / len(valores)) if valores else None,
-        "hipoglicemias": hipos,
-        "hiperglicemias": hipers,
-        "doses_aplicadas": len(dados["doses_aplicadas"]),
-        "total_insulina": total_insulina if dados["doses_aplicadas"] else None,
-        "media_insulina_dia": (total_insulina / dias_periodo) if dados["doses_aplicadas"] else None,
-        "eventos_criticos": dados["eventos_criticos"],
-    }
+    return await visao_paciente.relatorio_json(usuario["id"], periodo)
 
 
 @router.get("/hba1c")
@@ -161,11 +65,7 @@ async def hba1c_estimativa(
     dias: int = Query(hba1c.DIAS_PADRAO, ge=1),
     usuario: dict = Depends(usuario_atual),
 ):
-    """Mesma estimativa de GMI/HbA1c do comando *hba1c* no WhatsApp (hba1c.py)."""
-    estimativa = await hba1c.gerar_estimativa(usuario["id"], dias)
-    if estimativa is None:
-        return {"disponivel": False, "minimo_medicoes": hba1c.MINIMO_MEDICOES, "dias": dias}
-    return {"disponivel": True, **estimativa}
+    return await visao_paciente.hba1c_json(usuario["id"], dias)
 
 
 @router.get("/padroes")
@@ -173,21 +73,7 @@ async def padroes_detectados(
     dias: int = Query(padroes.DIAS_PADRAO, ge=1),
     usuario: dict = Depends(usuario_atual),
 ):
-    """Mesma detecção de padrões do comando *padroes* no WhatsApp (padroes.py)."""
-    lista = await padroes.detectar_padroes(usuario["id"], dias)
-    return {
-        "dias": dias,
-        "padroes": [
-            {
-                "dia_semana_label": padroes.DIAS_SEMANA_PT[p["dia_semana"]],
-                "periodo": p["periodo"],
-                "media": p["media"],
-                "tipo": p["tipo"],
-                "n": p["n"],
-            }
-            for p in lista
-        ],
-    }
+    return await visao_paciente.padroes_json(usuario["id"], dias)
 
 
 @router.get("/cuidadores")
@@ -264,6 +150,47 @@ async def reabastecer_estoque_dashboard(body: ReabastecerEstoqueBody, usuario: d
     ok = await estoque_service.reabastecer(usuario["id"], tipo, body.quantidade)
     if not ok:
         raise HTTPException(status_code=404, detail="Esse tipo ainda não foi configurado.")
+    return {"status": "ok"}
+
+
+# --------------------------------------------------------------------------
+# Médicos que acompanham o paciente
+# --------------------------------------------------------------------------
+
+@router.get("/medicos")
+async def listar_medicos_dashboard(usuario: dict = Depends(usuario_atual)):
+    return {"medicos": await medicos_service.medicos_do_paciente(usuario["id"])}
+
+
+class VincularMedicoBody(BaseModel):
+    codigo: str
+    confirmar: bool = False
+
+
+@router.post("/medicos/vincular")
+async def vincular_medico_dashboard(body: VincularMedicoBody, usuario: dict = Depends(usuario_atual)):
+    """
+    Em dois passos, de propósito: com confirmar=false só mostra QUEM é o
+    médico dono do código (nome e CRM); o acesso só é concedido quando o
+    paciente confirma, já sabendo pra quem está liberando os dados.
+    """
+    try:
+        medico = await medicos_service.buscar_por_codigo(body.codigo, usuario["id"])
+    except (medicos_service.ErroMedico, auth_web.ErroAutenticacao) as erro:
+        raise HTTPException(status_code=400, detail=str(erro)) from erro
+
+    publico = {"id": medico["id"], "nome": medico["nome"], "crm": medico["crm"], "uf": medico["uf"]}
+    if not body.confirmar:
+        return {"status": "confirmar", "medico": publico}
+
+    novo = await medicos_service.vincular(usuario["id"], medico)
+    return {"status": "vinculado" if novo else "ja_vinculado", "medico": publico}
+
+
+@router.delete("/medicos/{medico_id}")
+async def remover_medico_dashboard(medico_id: str, usuario: dict = Depends(usuario_atual)):
+    if not await medicos_service.desvincular(medico_id, usuario["id"]):
+        raise HTTPException(status_code=404, detail="Esse médico não está na sua lista.")
     return {"status": "ok"}
 
 

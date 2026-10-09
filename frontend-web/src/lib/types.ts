@@ -97,3 +97,33 @@ export type Plano = {
 export type ResultadoAssinatura =
   | (Plano & { status: "ok" })
   | { status: "requer_acao"; assinatura_id: string; client_secret: string };
+
+// --- Médicos ---------------------------------------------------------------
+
+export type MedicoEu = { id: string; nome: string; email: string; crm: string; uf: string; codigo_vinculo: string };
+
+export type ResumoPaciente = {
+  id: string;
+  nome: string | null;
+  vinculado_em: string;
+  tem_perfil: boolean;
+  ultima_glicemia: { valor: number; horario: string } | null;
+  medicoes: number;
+  media: number | null;
+  na_faixa_pct: number | null;
+  hipoglicemias: number;
+  hiperglicemias: number;
+  ultima_fora_da_faixa: boolean;
+  limite_baixo: number | null;
+  limite_alto: number | null;
+};
+
+/** Médico que o paciente vinculou (lado do paciente). */
+export type MedicoVinculado = { id: string; nome: string; crm: string; uf: string; vinculado_em: string };
+
+export type PreviaMedico = { id: string; nome: string; crm: string; uf: string };
+
+export type ResultadoVinculo =
+  | { status: "confirmar"; medico: PreviaMedico }
+  | { status: "vinculado" | "ja_vinculado"; medico: PreviaMedico };
+

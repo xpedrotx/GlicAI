@@ -2,45 +2,53 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { ChartColumn, CreditCard, LayoutDashboard, LogOut, Stethoscope, UserRound, Users } from "lucide-react";
-import { useUsuario } from "@/lib/auth-context";
+import { KeyRound, LogOut, Users } from "lucide-react";
+import { useMedico } from "@/lib/medico-context";
 import { api } from "@/lib/api";
 import { Logo } from "./logo";
 import { ThemeToggle } from "./theme-toggle";
 
 const NAV = [
-  { href: "/dashboard", rotulo: "Visão geral", rotuloCurto: "Início", icone: LayoutDashboard },
-  { href: "/dashboard/relatorios", rotulo: "Relatórios", icone: ChartColumn },
-  { href: "/dashboard/cuidadores", rotulo: "Cuidadores e estoque", rotuloCurto: "Cuidadores", icone: Users },
-  { href: "/dashboard/medicos", rotulo: "Médicos", icone: Stethoscope },
-  { href: "/dashboard/assinatura", rotulo: "Assinatura", icone: CreditCard },
-  { href: "/dashboard/perfil", rotulo: "Perfil", icone: UserRound },
+  {
+    href: "/medico",
+    rotulo: "Pacientes",
+    icone: Users,
+    ativoEm: (p: string) => p === "/medico" || p.startsWith("/medico/pacientes"),
+  },
+  {
+    href: "/medico/vinculacao",
+    rotulo: "Código de vinculação",
+    rotuloCurto: "Vinculação",
+    icone: KeyRound,
+    ativoEm: (p: string) => p === "/medico/vinculacao",
+  },
 ];
 
 function useSair() {
   const router = useRouter();
   return async () => {
-    await api.logout().catch(() => {});
-    router.push("/login");
+    await api.medicoLogout().catch(() => {});
+    router.push("/medico/entrar");
   };
 }
 
-/** Menu lateral fixo no desktop. */
-export function DashboardSidebar() {
+export function MedicoSidebar() {
   const pathname = usePathname();
-  const usuario = useUsuario();
+  const medico = useMedico();
   const sair = useSair();
-  const nome = usuario?.nome?.trim() || "Paciente";
 
   return (
     <aside className="sticky top-0 hidden h-screen w-64 shrink-0 flex-col border-r border-border bg-card lg:flex">
       <div className="px-6 py-6">
-        <Logo href="/dashboard" />
+        <Logo href="/medico" />
+        <p className="mt-2 w-fit rounded-full bg-primary/10 px-2.5 py-0.5 text-[11px] font-semibold text-primary">
+          Painel do médico
+        </p>
       </div>
 
       <nav className="flex flex-1 flex-col gap-1 px-3">
         {NAV.map((item) => {
-          const ativo = pathname === item.href;
+          const ativo = item.ativoEm(pathname);
           return (
             <Link
               key={item.href}
@@ -60,11 +68,13 @@ export function DashboardSidebar() {
       <div className="m-3 rounded-2xl border border-border bg-surface p-3">
         <div className="flex items-center gap-3">
           <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-primary to-accent text-sm font-bold text-white">
-            {nome.charAt(0).toUpperCase()}
+            {medico.nome.charAt(0).toUpperCase()}
           </span>
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold">{nome}</p>
-            <p className="text-xs text-muted">Conta GlicAI</p>
+            <p className="truncate text-sm font-semibold">{medico.nome}</p>
+            <p className="text-xs text-muted">
+              CRM {medico.crm}/{medico.uf}
+            </p>
           </div>
           <ThemeToggle />
         </div>
@@ -80,15 +90,14 @@ export function DashboardSidebar() {
   );
 }
 
-/** Barra superior + navegação inferior no celular/tablet. */
-export function DashboardHeader() {
+export function MedicoHeader() {
   const pathname = usePathname();
   const sair = useSair();
 
   return (
     <>
       <header className="sticky top-0 z-30 flex h-16 items-center justify-between border-b border-border bg-background/85 px-5 backdrop-blur-lg lg:hidden">
-        <Logo href="/dashboard" />
+        <Logo href="/medico" />
         <div className="flex items-center gap-2">
           <ThemeToggle />
           <button
@@ -102,9 +111,9 @@ export function DashboardHeader() {
         </div>
       </header>
 
-      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-6 border-t border-border bg-card/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-lg lg:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-2 border-t border-border bg-card/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-lg lg:hidden">
         {NAV.map((item) => {
-          const ativo = pathname === item.href;
+          const ativo = item.ativoEm(pathname);
           return (
             <Link
               key={item.href}
