@@ -105,6 +105,10 @@ export const api = {
       body: JSON.stringify({ assinatura_id: assinaturaId }),
     }),
 
+  cancelarAssinatura: () => chamar<Plano>("/dashboard/plano/cancelar", { method: "POST" }),
+
+  reativarAssinatura: () => chamar<Plano>("/dashboard/plano/reativar", { method: "POST" }),
+
   abrirPortal: () => chamar<{ url: string }>("/dashboard/plano/portal", { method: "POST" }),
   // --- Lado do paciente: médicos que acompanham ---
   medicosVinculados: () => chamar<{ medicos: MedicoVinculado[] }>("/dashboard/medicos"),

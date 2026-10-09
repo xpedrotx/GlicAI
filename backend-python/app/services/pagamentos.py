@@ -201,6 +201,33 @@ async def confirmar(usuario: dict, assinatura_id: str) -> dict:
     return {**planos.resumo(usuario), "status": status}
 
 
+async def alterar_cancelamento(usuario: dict, cancelar: bool) -> dict:
+    """
+    Cancela (ou desfaz o cancelamento de) a assinatura, pelo próprio site. O
+    cancelamento vale só no fim do período já pago: o paciente mantém o Pro
+    até a data de renovação e depois volta pro plano gratuito, sem nova cobrança.
+    """
+    from app.services import planos
+
+    _exigir_configurado()
+    assinatura_id = usuario.get("stripe_subscription_id")
+    if not assinatura_id or usuario.get("assinatura_status") not in ("active", "trialing", "past_due"):
+        raise ValueError("sem assinatura ativa")
+
+    try:
+        await stripe.Subscription.modify_async(assinatura_id, cancel_at_period_end=cancelar)
+    except stripe.StripeError as erro:
+        logger.exception("Falha ao %s a assinatura do usuário %s", "cancelar" if cancelar else "reativar", usuario["id"])
+        raise PagamentosIndisponiveis() from erro
+
+    atualizado = await sincronizar_assinatura(assinatura_id, usuario_id=usuario["id"])
+    return {
+        **planos.resumo(atualizado or usuario),
+        "pagamentos_disponiveis": True,
+        "publishable_key": settings.stripe_publishable_key,
+    }
+
+
 async def criar_portal(usuario: dict) -> str:
     """URL do portal do Stripe pra trocar cartão, ver faturas ou cancelar."""
     _exigir_configurado()

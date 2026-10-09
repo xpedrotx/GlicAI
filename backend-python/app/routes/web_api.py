@@ -242,6 +242,27 @@ async def confirmar_assinatura(body: ConfirmarAssinaturaBody, usuario: dict = De
         raise HTTPException(status_code=503, detail="Pagamentos indisponíveis no momento.") from erro
 
 
+async def _alterar_cancelamento(usuario: dict, cancelar: bool) -> dict:
+    try:
+        return await pagamentos.alterar_cancelamento(usuario, cancelar)
+    except ValueError as erro:
+        raise HTTPException(status_code=400, detail="Você não tem uma assinatura ativa.") from erro
+    except pagamentos.PagamentosIndisponiveis as erro:
+        raise HTTPException(status_code=503, detail="Pagamentos indisponíveis no momento.") from erro
+
+
+@router.post("/plano/cancelar")
+async def cancelar_assinatura(usuario: dict = Depends(usuario_atual)):
+    """Cancela no fim do período já pago (o paciente decide aqui no site, sem passar pelo portal do Stripe)."""
+    return await _alterar_cancelamento(usuario, True)
+
+
+@router.post("/plano/reativar")
+async def reativar_assinatura(usuario: dict = Depends(usuario_atual)):
+    """Desfaz o cancelamento enquanto o período pago ainda não acabou."""
+    return await _alterar_cancelamento(usuario, False)
+
+
 @router.post("/plano/portal")
 async def abrir_portal(usuario: dict = Depends(usuario_atual)):
     try:

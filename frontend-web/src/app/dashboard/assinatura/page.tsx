@@ -62,7 +62,9 @@ export default function AssinaturaPage() {
 
       {!plano && !erro && <Skeleton className="h-[420px] max-w-2xl" />}
 
-      {plano?.plano === "pro" && <CartaoPro plano={plano} aoGerenciar={gerenciar} gerenciando={abrindoPortal} />}
+      {plano?.plano === "pro" && (
+        <CartaoPro plano={plano} aoAtualizar={setPlano} aoAbrirPortal={gerenciar} abrindoPortal={abrindoPortal} />
+      )}
 
       {plano && plano.plano !== "pro" && (
         <Card className="w-full max-w-2xl border-primary/30">
@@ -131,35 +133,54 @@ export default function AssinaturaPage() {
   );
 }
 
-function CartaoPro({ plano, aoGerenciar, gerenciando }: { plano: Plano; aoGerenciar: () => void; gerenciando: boolean }) {
+function CartaoPro({
+  plano,
+  aoAtualizar,
+  aoAbrirPortal,
+  abrindoPortal,
+}: {
+  plano: Plano;
+  aoAtualizar: (p: Plano) => void;
+  aoAbrirPortal: () => void;
+  abrindoPortal: boolean;
+}) {
+  const [confirmando, setConfirmando] = useState(false);
+  const [ocupado, setOcupado] = useState(false);
+  const [erro, setErro] = useState("");
+
   const detalhe = plano.cortesia
     ? "Cortesia — tudo liberado."
     : plano.assinatura_status === "past_due"
       ? "Não conseguimos cobrar sua última fatura. Atualize o cartão para não perder o acesso."
       : plano.cancela_no_fim
-        ? `Assinatura cancelada — você tem acesso até ${formatarData(plano.renova_em)}.`
+        ? `Cancelamento agendado — você tem acesso até ${formatarData(plano.renova_em)}.`
         : plano.renova_em
           ? `Renova em ${formatarData(plano.renova_em)} · ${plano.preco}`
           : plano.preco;
 
+  async function alterar(cancelar: boolean) {
+    setErro("");
+    setOcupado(true);
+    try {
+      aoAtualizar(cancelar ? await api.cancelarAssinatura() : await api.reativarAssinatura());
+      setConfirmando(false);
+    } catch (e) {
+      setErro(e instanceof ApiError ? e.message : "Não consegui concluir agora. Tente de novo.");
+    } finally {
+      setOcupado(false);
+    }
+  }
+
   return (
     <Card className="w-full max-w-2xl border-primary/30">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex items-start gap-3">
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-accent text-white">
-            <Sparkles size={20} />
-          </span>
-          <div>
-            <p className="font-heading text-xl font-bold">GlicAI Pro</p>
-            <p className="mt-0.5 text-sm text-muted">{detalhe}</p>
-          </div>
+      <div className="flex items-start gap-3">
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-accent text-white">
+          <Sparkles size={20} />
+        </span>
+        <div>
+          <p className="font-heading text-xl font-bold">GlicAI Pro</p>
+          <p className="mt-0.5 text-sm text-muted">{detalhe}</p>
         </div>
-        {plano.tem_cliente_stripe && !plano.cortesia && (
-          <Button variant="ghost" onClick={aoGerenciar} carregando={gerenciando}>
-            {!gerenciando && <ExternalLink size={16} />}
-            Gerenciar assinatura
-          </Button>
-        )}
       </div>
 
       <ul className="mt-6 flex flex-col gap-2.5 border-t border-border pt-6 text-[15px]">
@@ -170,6 +191,58 @@ function CartaoPro({ plano, aoGerenciar, gerenciando }: { plano: Plano; aoGerenc
           </li>
         ))}
       </ul>
+
+      {!plano.cortesia && (
+        <div className="mt-6 border-t border-border pt-6">
+          {plano.cancela_no_fim ? (
+            <div className="flex flex-col gap-4">
+              <p className="text-sm leading-relaxed text-muted">
+                Você não será mais cobrado. Depois de {formatarData(plano.renova_em)}, sua conta volta para o plano gratuito
+                (1 medição por dia e sem lembretes). Mudou de ideia? Dá para reativar até lá, sem perder nada.
+              </p>
+              <Button onClick={() => alterar(false)} carregando={ocupado} className="w-full sm:w-auto sm:self-start">
+                Reativar assinatura
+              </Button>
+            </div>
+          ) : confirmando ? (
+            <div className="rounded-xl border border-vermelho/25 bg-vermelho/[0.06] p-4">
+              <p className="font-heading text-base font-bold">Cancelar o GlicAI Pro?</p>
+              <p className="mt-2 text-sm leading-relaxed text-foreground/85">
+                Você continua com tudo liberado até <span className="font-semibold">{formatarData(plano.renova_em)}</span> e
+                não será cobrado de novo. Depois disso, a conta volta para o plano gratuito: 1 medição por dia e sem
+                lembretes.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button variant="perigo" onClick={() => alterar(true)} carregando={ocupado}>
+                  Sim, cancelar assinatura
+                </Button>
+                <Button variant="ghost" onClick={() => setConfirmando(false)} disabled={ocupado}>
+                  Manter assinatura
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <Button variant="ghost" onClick={() => setConfirmando(true)}>
+              Cancelar assinatura
+            </Button>
+          )}
+
+          <div className="mt-3">
+            <ErrorText>{erro}</ErrorText>
+          </div>
+
+          {plano.tem_cliente_stripe && (
+            <button
+              type="button"
+              onClick={aoAbrirPortal}
+              disabled={abrindoPortal}
+              className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-muted transition hover:text-foreground disabled:opacity-60"
+            >
+              <ExternalLink size={14} /> Trocar cartão e ver faturas
+            </button>
+          )}
+        </div>
+      )}
     </Card>
   );
 }

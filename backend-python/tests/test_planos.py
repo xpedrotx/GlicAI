@@ -473,3 +473,83 @@ def test_webhook_assinado_processa_o_evento(stripe_configurado):
 
     assert resposta == {"status": "ok"}
     assert processar.await_args.args[0]["type"] == "customer.subscription.updated"
+
+
+# --------------------------------------------------------------------------
+# Cancelar / reativar pelo próprio site
+# --------------------------------------------------------------------------
+
+def test_cancelar_vale_no_fim_do_periodo_e_o_pro_continua_ate_la(stripe_configurado):
+    fake = FakeSupabase()
+    _ligar(fake)
+    usuario = _usuario(fake, teste_termina_em=_dias(-10), stripe_subscription_id="sub_1", assinatura_status="active")
+    modificar = AsyncMock()
+
+    with patch.object(stripe.Subscription, "modify_async", new=modificar), \
+         patch.object(stripe.Subscription, "retrieve_async",
+                      new=AsyncMock(return_value=_assinatura(cancel_at_period_end=True, metadata={"usuario_id": usuario["id"]}))):
+        resultado = _executar(pagamentos.alterar_cancelamento(usuario, True))
+
+    modificar.assert_awaited_once_with("sub_1", cancel_at_period_end=True)
+    assert resultado["cancela_no_fim"] is True
+    assert resultado["plano"] == "pro"  # ainda tem acesso até o fim do período pago
+    assert resultado["renova_em"]
+    assert fake.store["usuarios"][0]["assinatura_cancela_no_fim"] is True
+
+
+def test_reativar_desfaz_o_cancelamento(stripe_configurado):
+    fake = FakeSupabase()
+    _ligar(fake)
+    usuario = _usuario(
+        fake, teste_termina_em=_dias(-10), stripe_subscription_id="sub_1", assinatura_status="active",
+        assinatura_cancela_no_fim=True,
+    )
+    modificar = AsyncMock()
+
+    with patch.object(stripe.Subscription, "modify_async", new=modificar), \
+         patch.object(stripe.Subscription, "retrieve_async",
+                      new=AsyncMock(return_value=_assinatura(cancel_at_period_end=False, metadata={"usuario_id": usuario["id"]}))):
+        resultado = _executar(pagamentos.alterar_cancelamento(usuario, False))
+
+    modificar.assert_awaited_once_with("sub_1", cancel_at_period_end=False)
+    assert resultado["cancela_no_fim"] is False and resultado["plano"] == "pro"
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {},  # nunca assinou
+        {"plano_cortesia": True},  # cortesia não tem assinatura no Stripe
+        {"stripe_subscription_id": "sub_1", "assinatura_status": "canceled"},  # já encerrada
+    ],
+)
+def test_cancelar_sem_assinatura_ativa_e_recusado(stripe_configurado, extra):
+    fake = FakeSupabase()
+    _ligar(fake)
+    usuario = _usuario(fake, teste_termina_em=_dias(-10), **extra)
+    modificar = AsyncMock()
+
+    with patch.object(stripe.Subscription, "modify_async", new=modificar):
+        with pytest.raises(ValueError):
+            _executar(pagamentos.alterar_cancelamento(usuario, True))
+    modificar.assert_not_awaited()
+
+
+def test_cancelar_so_mexe_na_assinatura_do_proprio_usuario(stripe_configurado):
+    """O id da assinatura vem do banco (linha do usuário logado), nunca do corpo da requisição."""
+    import inspect
+
+    from app.routes import web_api
+
+    assert list(inspect.signature(web_api.cancelar_assinatura).parameters) == ["usuario"]
+    assert list(inspect.signature(web_api.reativar_assinatura).parameters) == ["usuario"]
+
+
+def test_rota_de_cancelar_traduz_os_erros(stripe_configurado):
+    from fastapi import HTTPException
+
+    from app.routes import web_api
+
+    with pytest.raises(HTTPException) as erro:
+        _executar(web_api.cancelar_assinatura(usuario={"id": "u1", "teste_termina_em": _dias(-1)}))
+    assert erro.value.status_code == 400
