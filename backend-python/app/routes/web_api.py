@@ -2,6 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from app.config import settings
 from app.routes.web_auth import usuario_atual
 from app.services import cuidadores as cuidadores_service
 from app.services import estoque as estoque_service
@@ -272,29 +273,44 @@ async def reabastecer_estoque_dashboard(body: ReabastecerEstoqueBody, usuario: d
 
 @router.get("/plano")
 async def obter_plano(usuario: dict = Depends(usuario_atual)):
-    return {**planos.resumo(usuario), "pagamentos_disponiveis": pagamentos.disponivel()}
+    return {
+        **planos.resumo(usuario),
+        "pagamentos_disponiveis": pagamentos.disponivel(),
+        # chave publicável é pública por natureza (vai no JavaScript do site)
+        "publishable_key": settings.stripe_publishable_key if pagamentos.disponivel() else None,
+    }
 
 
-@router.post("/plano/checkout")
-async def iniciar_checkout(usuario: dict = Depends(usuario_atual)):
+class AssinarBody(BaseModel):
+    metodo_pagamento_id: str
+
+
+@router.post("/plano/assinar")
+async def assinar_plano(body: AssinarBody, usuario: dict = Depends(usuario_atual)):
+    """Recebe o pm_... gerado pelo Stripe no navegador e cria a assinatura."""
     if planos.plano_efetivo(usuario) == "pro":
         raise HTTPException(status_code=400, detail="Você já está no GlicAI Pro.")
     try:
-        return await pagamentos.criar_checkout(usuario)
+        return await pagamentos.assinar(usuario, body.metodo_pagamento_id.strip())
+    except ValueError as erro:
+        raise HTTPException(status_code=400, detail="Dados do cartão inválidos. Tente de novo.") from erro
+    except pagamentos.CartaoRecusado as erro:
+        raise HTTPException(status_code=402, detail=str(erro)) from erro
     except pagamentos.PagamentosIndisponiveis as erro:
         raise HTTPException(status_code=503, detail="Pagamentos indisponíveis no momento.") from erro
 
 
-class ConfirmarSessaoBody(BaseModel):
-    sessao_id: str
+class ConfirmarAssinaturaBody(BaseModel):
+    assinatura_id: str
 
 
 @router.post("/plano/confirmar")
-async def confirmar_checkout(body: ConfirmarSessaoBody, usuario: dict = Depends(usuario_atual)):
+async def confirmar_assinatura(body: ConfirmarAssinaturaBody, usuario: dict = Depends(usuario_atual)):
+    """Chamado depois que o 3D Secure foi concluído no navegador."""
     try:
-        return await pagamentos.confirmar_sessao(usuario, body.sessao_id)
+        return await pagamentos.confirmar(usuario, body.assinatura_id)
     except PermissionError as erro:
-        raise HTTPException(status_code=403, detail="Essa sessão de pagamento não é sua.") from erro
+        raise HTTPException(status_code=403, detail="Essa assinatura não é sua.") from erro
     except pagamentos.PagamentosIndisponiveis as erro:
         raise HTTPException(status_code=503, detail="Pagamentos indisponíveis no momento.") from erro
 

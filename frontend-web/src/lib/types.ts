@@ -90,4 +90,10 @@ export type Plano = {
   preco: string;
   medicoes_por_dia_free: number;
   pagamentos_disponiveis: boolean;
+  publishable_key: string | null;
 };
+
+/** Resposta de POST /plano/assinar: ou já ficou Pro, ou o banco pediu autenticação (3D Secure). */
+export type ResultadoAssinatura =
+  | (Plano & { status: "ok" })
+  | { status: "requer_acao"; assinatura_id: string; client_secret: string };

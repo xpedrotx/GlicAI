@@ -6,7 +6,7 @@
  * o cookie httpOnly de sessão (glicai_sessao) seja enviado nas chamadas.
  */
 
-import type { Convite, Cuidador, HbA1c, Historico, ItemEstoque, Padroes, PerfilCompleto, Plano, Relatorio } from "./types";
+import type { Convite, Cuidador, HbA1c, Historico, ItemEstoque, Padroes, PerfilCompleto, Plano, Relatorio, ResultadoAssinatura } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -93,13 +93,16 @@ export const api = {
 
   plano: () => chamar<Plano>("/dashboard/plano"),
 
-  iniciarCheckout: () =>
-    chamar<{ client_secret: string; publishable_key: string }>("/dashboard/plano/checkout", { method: "POST" }),
+  assinar: (metodoPagamentoId: string) =>
+    chamar<ResultadoAssinatura>("/dashboard/plano/assinar", {
+      method: "POST",
+      body: JSON.stringify({ metodo_pagamento_id: metodoPagamentoId }),
+    }),
 
-  confirmarCheckout: (sessaoId: string) =>
+  confirmarAssinatura: (assinaturaId: string) =>
     chamar<Plano & { status: string }>("/dashboard/plano/confirmar", {
       method: "POST",
-      body: JSON.stringify({ sessao_id: sessaoId }),
+      body: JSON.stringify({ assinatura_id: assinaturaId }),
     }),
 
   abrirPortal: () => chamar<{ url: string }>("/dashboard/plano/portal", { method: "POST" }),

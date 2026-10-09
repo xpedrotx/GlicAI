@@ -230,29 +230,7 @@ def test_sem_chaves_do_stripe_pagamentos_ficam_indisponiveis(monkeypatch):
     monkeypatch.setattr(settings, "stripe_secret_key", "")
     assert pagamentos.disponivel() is False
     with pytest.raises(pagamentos.PagamentosIndisponiveis):
-        _executar(pagamentos.criar_checkout({"id": "u1"}))
-
-
-def test_checkout_cobra_9_90_por_mes_e_marca_o_usuario(stripe_configurado):
-    criar = AsyncMock(return_value={"client_secret": "cs_123"})
-    with patch.object(stripe.checkout.Session, "create_async", new=criar):
-        resultado = _executar(pagamentos.criar_checkout({"id": "u1"}))
-
-    assert resultado == {"client_secret": "cs_123", "publishable_key": "pk_test_x"}
-    params = criar.await_args.kwargs
-    assert params["mode"] == "subscription"
-    assert params["ui_mode"] == "embedded_page"
-    assert params["metadata"] == {"usuario_id": "u1"}
-    preco = params["line_items"][0]["price_data"]
-    assert (preco["currency"], preco["unit_amount"], preco["recurring"]["interval"]) == ("brl", 990, "month")
-    assert "customer" not in params
-
-
-def test_checkout_reaproveita_cliente_existente(stripe_configurado):
-    criar = AsyncMock(return_value={"client_secret": "cs_1"})
-    with patch.object(stripe.checkout.Session, "create_async", new=criar):
-        _executar(pagamentos.criar_checkout({"id": "u1", "stripe_customer_id": "cus_9"}))
-    assert criar.await_args.kwargs["customer"] == "cus_9"
+        _executar(pagamentos.assinar({"id": "u1"}, "pm_x"))
 
 
 def _obj(dados: dict):
@@ -299,33 +277,139 @@ def test_cancelamento_derruba_pro_e_cancelar_no_fim_mantem_ate_la(stripe_configu
     assert usuario["id"] == fake.store["usuarios"][0]["id"]
 
 
-def test_confirmar_sessao_recusa_sessao_de_outro_usuario(stripe_configurado):
-    sessao = _obj({"metadata": {"usuario_id": "outro"}, "status": "complete", "subscription": "sub_1"})
-    with patch.object(stripe.checkout.Session, "retrieve_async", new=AsyncMock(return_value=sessao)):
+def test_confirmar_recusa_assinatura_de_outro_usuario(stripe_configurado):
+    with patch.object(stripe.Subscription, "retrieve_async",
+                      new=AsyncMock(return_value=_assinatura(metadata={"usuario_id": "outro"}))):
         with pytest.raises(PermissionError):
-            _executar(pagamentos.confirmar_sessao({"id": "u1"}, "cs_1"))
+            _executar(pagamentos.confirmar({"id": "u1"}, "sub_1"))
 
 
-def test_confirmar_sessao_paga_libera_na_hora(stripe_configurado):
+def test_confirmar_assinatura_paga_libera_na_hora(stripe_configurado):
     fake = FakeSupabase()
     _ligar(fake)
     usuario = _usuario(fake, teste_termina_em=_dias(-1))
-    sessao = _obj({"metadata": {"usuario_id": usuario["id"]}, "status": "complete", "subscription": "sub_1"})
+    assinatura = _assinatura(metadata={"usuario_id": usuario["id"]})
 
-    with patch.object(stripe.checkout.Session, "retrieve_async", new=AsyncMock(return_value=sessao)), \
-         patch.object(stripe.Subscription, "retrieve_async", new=AsyncMock(return_value=_assinatura())):
-        resultado = _executar(pagamentos.confirmar_sessao(usuario, "cs_1"))
+    with patch.object(stripe.Subscription, "retrieve_async", new=AsyncMock(return_value=assinatura)):
+        resultado = _executar(pagamentos.confirmar(usuario, "sub_1"))
 
     assert resultado["status"] == "ok"
     assert resultado["plano"] == "pro"
 
 
-def test_confirmar_sessao_ainda_nao_paga_fica_pendente(stripe_configurado):
-    sessao = _obj({"metadata": {"usuario_id": "u1"}, "status": "open"})
-    with patch.object(stripe.checkout.Session, "retrieve_async", new=AsyncMock(return_value=sessao)):
-        resultado = _executar(pagamentos.confirmar_sessao({"id": "u1", "teste_termina_em": _dias(-1)}, "cs_1"))
+def test_confirmar_assinatura_ainda_incompleta_fica_pendente(stripe_configurado):
+    fake = FakeSupabase()
+    _ligar(fake)
+    usuario = _usuario(fake, teste_termina_em=_dias(-1))
+    assinatura = _assinatura("incomplete", metadata={"usuario_id": usuario["id"]})
+
+    with patch.object(stripe.Subscription, "retrieve_async", new=AsyncMock(return_value=assinatura)):
+        resultado = _executar(pagamentos.confirmar(usuario, "sub_1"))
+
     assert resultado["status"] == "pendente"
     assert resultado["plano"] == "free"
+
+
+# --- assinar(): cartao coletado no formulario do site --------------------------
+
+def _stripe_assinar(assinatura, intencao=None, existentes=()):
+    """Troca as chamadas ao Stripe usadas por assinar() por mocks."""
+    mocks = {
+        "criar_cliente": patch.object(stripe.Customer, "create_async", new=AsyncMock(return_value=_obj({"id": "cus_novo"}))),
+        "atualizar_cliente": patch.object(stripe.Customer, "modify_async", new=AsyncMock()),
+        "anexar": patch.object(stripe.PaymentMethod, "attach_async", new=AsyncMock(return_value=_obj({"id": "pm_card"}))),
+        "listar_assinaturas": patch.object(stripe.Subscription, "list_async",
+                                           new=AsyncMock(return_value=_obj({"data": list(existentes)}))),
+        "criar_assinatura": patch.object(stripe.Subscription, "create_async", new=AsyncMock(return_value=assinatura)),
+        "cancelar": patch.object(stripe.Subscription, "cancel_async", new=AsyncMock()),
+        "intencao": patch.object(stripe.PaymentIntent, "retrieve_async", new=AsyncMock(return_value=_obj(intencao or {}))),
+        "preco": patch.object(pagamentos, "_preco_id", new=AsyncMock(return_value="price_9_90")),
+    }
+    return mocks
+
+
+def test_assinar_cobra_na_hora_e_libera_o_pro(stripe_configurado):
+    fake = FakeSupabase()
+    _ligar(fake)
+    usuario = _usuario(fake, teste_termina_em=_dias(-1))
+    mocks = _stripe_assinar(_assinatura(metadata={"usuario_id": usuario["id"]}))
+    ativos = {n: m.start() for n, m in mocks.items()}
+    try:
+        with patch.object(stripe.Subscription, "retrieve_async",
+                          new=AsyncMock(return_value=_assinatura(metadata={"usuario_id": usuario["id"]}))):
+            resultado = _executar(pagamentos.assinar(usuario, "pm_card"))
+    finally:
+        for m in mocks.values():
+            m.stop()
+
+    assert resultado["status"] == "ok" and resultado["plano"] == "pro"
+    params = ativos["criar_assinatura"].await_args.kwargs
+    assert params["items"] == [{"price": "price_9_90"}]
+    assert params["default_payment_method"] == "pm_card"
+    assert params["metadata"] == {"usuario_id": usuario["id"]}
+    ativos["anexar"].assert_awaited_once_with("pm_card", customer="cus_novo")
+    assert fake.store["usuarios"][0]["stripe_customer_id"] == "cus_1"  # sincronizar grava o cliente da assinatura
+
+
+def test_assinar_reaproveita_cliente_e_cancela_tentativas_incompletas(stripe_configurado):
+    fake = FakeSupabase()
+    _ligar(fake)
+    usuario = _usuario(fake, teste_termina_em=_dias(-1), stripe_customer_id="cus_9")
+    mocks = _stripe_assinar(_assinatura(metadata={"usuario_id": usuario["id"]}), existentes=[{"id": "sub_velha"}])
+    ativos = {n: m.start() for n, m in mocks.items()}
+    try:
+        with patch.object(stripe.Subscription, "retrieve_async",
+                          new=AsyncMock(return_value=_assinatura(metadata={"usuario_id": usuario["id"]}))):
+            _executar(pagamentos.assinar(usuario, "pm_card"))
+    finally:
+        for m in mocks.values():
+            m.stop()
+
+    ativos["criar_cliente"].assert_not_awaited()
+    ativos["anexar"].assert_awaited_once_with("pm_card", customer="cus_9")
+    ativos["cancelar"].assert_awaited_once_with("sub_velha")
+
+
+def test_assinar_pede_3d_secure_quando_o_banco_exige(stripe_configurado):
+    fake = FakeSupabase()
+    _ligar(fake)
+    usuario = _usuario(fake, teste_termina_em=_dias(-1))
+    incompleta = _assinatura("incomplete", latest_invoice={"confirmation_secret": {"client_secret": "pi_77_secret_abc"}})
+    mocks = _stripe_assinar(incompleta, intencao={"status": "requires_action"})
+    ativos = {n: m.start() for n, m in mocks.items()}
+    try:
+        resultado = _executar(pagamentos.assinar(usuario, "pm_card"))
+    finally:
+        for m in mocks.values():
+            m.stop()
+
+    assert resultado == {"status": "requer_acao", "assinatura_id": "sub_1", "client_secret": "pi_77_secret_abc"}
+    assert ativos["intencao"].await_args.args == ("pi_77",)
+    ativos["cancelar"].assert_not_awaited()
+
+
+def test_assinar_cartao_recusado_cancela_a_assinatura_e_explica(stripe_configurado):
+    fake = FakeSupabase()
+    _ligar(fake)
+    usuario = _usuario(fake, teste_termina_em=_dias(-1))
+    incompleta = _assinatura("incomplete", latest_invoice={"confirmation_secret": {"client_secret": "pi_77_secret_abc"}})
+    mocks = _stripe_assinar(
+        incompleta, intencao={"status": "requires_payment_method", "last_payment_error": {"decline_code": "insufficient_funds"}}
+    )
+    ativos = {n: m.start() for n, m in mocks.items()}
+    try:
+        with pytest.raises(pagamentos.CartaoRecusado, match="sem saldo"):
+            _executar(pagamentos.assinar(usuario, "pm_card"))
+    finally:
+        for m in mocks.values():
+            m.stop()
+
+    ativos["cancelar"].assert_awaited_once_with("sub_1")
+
+
+def test_assinar_recusa_metodo_de_pagamento_invalido(stripe_configurado):
+    with pytest.raises(ValueError):
+        _executar(pagamentos.assinar({"id": "u1"}, "tok_qualquer"))
 
 
 def test_portal_exige_cliente_do_stripe(stripe_configurado):
@@ -344,11 +428,9 @@ def test_evento_de_fatura_paga_sincroniza_a_assinatura(stripe_configurado):
             {"type": "invoice.payment_failed", "data": {"object": {"parent": {"subscription_details": {"subscription": "sub_7"}}}}}
         )))
         _executar(pagamentos.processar_evento(_obj({"type": "customer.subscription.deleted", "data": {"object": {"id": "sub_8"}}})))
-        _executar(pagamentos.processar_evento(_obj({"type": "checkout.session.completed", "data": {"object": {
-            "mode": "subscription", "subscription": "sub_9", "metadata": {"usuario_id": "u1"}}}})))
         _executar(pagamentos.processar_evento(_obj({"type": "charge.succeeded", "data": {"object": {"id": "ch_1"}}})))
 
-    assert [c.args[0] for c in sincronizar.await_args_list] == ["sub_7", "sub_8", "sub_9"]
+    assert [c.args[0] for c in sincronizar.await_args_list] == ["sub_7", "sub_8"]
 
 
 # --------------------------------------------------------------------------

@@ -15,7 +15,7 @@
 #   - whsec_:     Developers > Webhooks > criar endpoint
 #                 https://glicia.pedrotx.com.br/api/stripe/webhook
 #                 eventos: customer.subscription.created/updated/deleted,
-#                 checkout.session.completed, invoice.paid, invoice.payment_failed
+#                 invoice.paid, invoice.payment_failed
 set -euo pipefail
 
 SERVIDOR="${GLICAI_SERVIDOR:-root@49.13.198.178}"
