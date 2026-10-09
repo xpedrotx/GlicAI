@@ -2,7 +2,7 @@
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from app.services import auth_web, confirmacoes, correcao, cuidadores, estoque, ia, remedicao
+from app.services import auth_web, confirmacoes, correcao, cuidadores, estoque, ia, planos, remedicao
 from app.services.alertas import checar_alerta_glicemia
 from app.services.bolus import (
     calcular_correcao,
@@ -212,7 +212,7 @@ async def _tratar_sugestao_pendente(usuario: dict, mensagem: str, pendente: dict
 _COMANDOS_SEGUROS_SEM_SUBACAO = {
     "ajuda", "menu", "help", "oi", "ola", "oii", "oie", "eae", "hey", "hello",
     "perfil", "basal", "relatorio", "exportar", "hba1c", "gmi", "padroes", "padrao",
-    "criar_senha",
+    "criar_senha", "plano", "assinatura", "assinar",
     # só mostram o que seria apagado e pedem *sim/não* por conta própria
     "apagar_glicemia", "apagar_dose", "desfazer",
 }
@@ -497,6 +497,8 @@ async def processar_comando(usuario: dict, mensagem: str) -> str:
             return await _estoque(usuario, partes[1:])
         if comando == "criar_senha":
             return auth_web.gerar_codigo_login(usuario["id"])
+        if comando in ("plano", "assinatura", "assinar"):
+            return planos.mensagem_plano(usuario)
         if comando == "apagar_glicemia":
             return await _pedir_confirmacao_apagar_glicemia(usuario, partes[1:])
         if comando == "apagar_dose":
@@ -570,6 +572,12 @@ async def _glicemia(usuario: dict, args: list[str]) -> str:
         )
         aviso_estoque_emergencia = await estoque.consumir(usuario["id"], "fita_dextro", 1)
         return _mensagem_emergencia_baixa(valor) + linha_iob + (aviso_estoque_emergencia or "")
+
+    # Plano gratuito: 1 medicao de rotina por dia. Fora da faixa e emergencias
+    # nunca chegam aqui bloqueadas (ver planos.mensagem_limite_glicemia).
+    limite_do_plano = planos.mensagem_limite_glicemia(usuario, valor)
+    if limite_do_plano:
+        return limite_do_plano
 
     supabase.table("registros_glicemia").insert(
         {"usuario_id": usuario["id"], "valor": int(valor), "contexto": contexto}
@@ -1051,6 +1059,9 @@ async def _lembrete_listar(usuario: dict) -> str:
 
 
 async def _lembrete_adicionar(usuario: dict, horario_texto: str, tipo_texto: str | None) -> str:
+    if not planos.tem_acesso_completo(usuario):
+        return planos.mensagem_so_pro("Criar lembretes")
+
     hora = parse_hora(horario_texto)
     if hora is None:
         return "Manda o horário no formato HH:MM. Tipo *lembrete adicionar 08:00*"
@@ -1294,6 +1305,7 @@ def _ajuda() -> str:
         "*⚙️ Configurações*\n"
         "• perfil · basal · editar meta 110\n"
         "• lembrete · estoque · cuidador\n"
+        "• plano _(assinatura GlicAI Pro)_\n"
         "• criar senha _(acesso ao site)_\n"
         "• excluir conta\n\n"
         "_Antes de registrar glicemia ou dose a partir de uma frase, eu sempre confirmo com você._"

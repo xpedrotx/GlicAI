@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { ChartColumn, LayoutDashboard, LogOut, UserRound, Users } from "lucide-react";
+import { ChartColumn, CreditCard, LayoutDashboard, LogOut, UserRound, Users } from "lucide-react";
 import { useUsuario } from "@/lib/auth-context";
 import { api } from "@/lib/api";
 import { Logo } from "./logo";
@@ -12,6 +12,7 @@ const NAV = [
   { href: "/dashboard", rotulo: "Visão geral", icone: LayoutDashboard },
   { href: "/dashboard/relatorios", rotulo: "Relatórios", icone: ChartColumn },
   { href: "/dashboard/cuidadores", rotulo: "Cuidadores e estoque", rotuloCurto: "Cuidadores", icone: Users },
+  { href: "/dashboard/assinatura", rotulo: "Assinatura", icone: CreditCard },
   { href: "/dashboard/perfil", rotulo: "Perfil", icone: UserRound },
 ];
 
@@ -100,7 +101,7 @@ export function DashboardHeader() {
         </div>
       </header>
 
-      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-4 border-t border-border bg-card/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-lg lg:hidden">
+      <nav className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 border-t border-border bg-card/95 pb-[env(safe-area-inset-bottom)] backdrop-blur-lg lg:hidden">
         {NAV.map((item) => {
           const ativo = pathname === item.href;
           return (

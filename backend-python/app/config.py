@@ -18,6 +18,16 @@ class Settings(BaseSettings):
     # (ex: rodando o backend direto, sem o Caddy na frente), colocar
     # COOKIE_SECURE=false no .env pra conseguir testar o login no browser.
     cookie_secure: bool = True
+    # Stripe (assinatura do GlicAI Pro). Sem as chaves o site mostra os planos
+    # mas o botão de assinar fica indisponível — nunca derruba o app.
+    stripe_secret_key: str = ""
+    stripe_publishable_key: str = ""
+    stripe_webhook_secret: str = ""
+    # Opcional: ID de um preço criado no painel do Stripe. Sem ele, o checkout
+    # cobra R$ 9,90/mês direto (ver pagamentos._linha_do_plano).
+    stripe_price_id: str = ""
+    # Endereco publico do site: links mandados pelo WhatsApp e volta do checkout.
+    site_url: str = "https://glicia.pedrotx.com.br"
 
     class Config:
         env_file = ".env"

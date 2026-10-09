@@ -16,6 +16,7 @@ Dois intervalos, cada um com a própria justificativa clínica:
 import logging
 from datetime import datetime, timedelta, timezone
 
+from app.services import planos
 from app.services.supabase_client import supabase
 from app.services.whatsapp_sender import enviar_mensagem
 
@@ -82,7 +83,9 @@ async def verificar_pendentes() -> None:
     for l in pendentes:
         try:
             usuario = _buscar_usuario(l["usuario_id"])
-            if usuario:
+            # Plano gratuito não recebe lembretes — o aviso do alerta em si já
+            # saiu na hora, isto é só o "meça de novo" depois.
+            if usuario and planos.tem_acesso_completo(usuario):
                 # Linhas criadas antes da migration do campo "tipo" não têm
                 # esse valor — só existiam pra hipoglicemia até então.
                 tipo = l.get("tipo") or "hipoglicemia"

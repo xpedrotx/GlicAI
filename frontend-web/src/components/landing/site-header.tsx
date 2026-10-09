@@ -11,6 +11,7 @@ const LINKS = [
   { href: "#como-funciona", rotulo: "Como funciona" },
   { href: "#recursos", rotulo: "Recursos" },
   { href: "#seguranca", rotulo: "Segurança" },
+  { href: "#planos", rotulo: "Planos" },
   { href: "#duvidas", rotulo: "Dúvidas" },
 ];
 

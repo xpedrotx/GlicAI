@@ -10,6 +10,7 @@ import {
   FileText,
   Lock,
   MessageCircle,
+  Minus,
   Package,
   ShieldCheck,
   Smartphone,
@@ -99,6 +100,10 @@ const SEGURANCA = [
 ];
 
 const DUVIDAS = [
+  {
+    p: "Quanto custa?",
+    r: "Os primeiros 7 dias são grátis, com tudo liberado. Depois você pode continuar no plano gratuito (1 registro de glicemia por dia e sem lembretes) ou assinar o GlicAI Pro por R$ 9,90 por mês, com uso ilimitado. Dá para cancelar a qualquer momento.",
+  },
   {
     p: "Preciso instalar algum aplicativo?",
     r: "Não. O GlicAI funciona no WhatsApp que você já usa. O painel web é opcional e abre em qualquer navegador, no celular ou no computador.",
@@ -281,6 +286,77 @@ export default function Home() {
                 </div>
               ))}
             </div>
+          </div>
+        </section>
+
+        {/* Planos */}
+        <section id="planos" className="scroll-mt-20 border-t border-border py-20">
+          <div className="mx-auto max-w-6xl px-5">
+            <Cabecalho
+              rotulo="Planos"
+              titulo="Comece grátis por 7 dias"
+              texto="Teste tudo sem cartão. Depois, continue no plano gratuito ou assine o Pro por menos de um lanche."
+            />
+            <div className="mx-auto mt-12 grid max-w-4xl gap-5 md:grid-cols-2">
+              <div className="rounded-3xl border border-border bg-card p-8 shadow-[var(--sombra)]">
+                <p className="font-heading text-lg font-bold">Gratuito</p>
+                <p className="mt-3 font-heading text-4xl font-extrabold tracking-tight">
+                  R$ 0<span className="text-base font-medium text-muted"> /mês</span>
+                </p>
+                <p className="mt-2 text-sm text-muted">Para registrar o essencial.</p>
+                <ul className="mt-6 flex flex-col gap-3 text-[15px]">
+                  {[
+                    "1 registro de glicemia por dia",
+                    "Cálculo de dose e alertas de hipo/hiper",
+                    "Aviso aos cuidadores",
+                    "Painel, relatórios e PDF",
+                  ].map((t) => (
+                    <li key={t} className="flex items-start gap-2.5">
+                      <CircleCheck size={18} className="mt-0.5 shrink-0 text-verde" />
+                      {t}
+                    </li>
+                  ))}
+                  <li className="flex items-start gap-2.5 text-muted">
+                    <Minus size={18} className="mt-0.5 shrink-0" />
+                    Sem lembretes
+                  </li>
+                </ul>
+              </div>
+
+              <div className="relative rounded-3xl border-2 border-primary bg-card p-8 shadow-xl shadow-primary/10">
+                <span className="absolute -top-3 left-8 rounded-full bg-primary px-3 py-1 text-xs font-bold text-primary-foreground">
+                  7 dias grátis
+                </span>
+                <p className="font-heading text-lg font-bold">GlicAI Pro</p>
+                <p className="mt-3 font-heading text-4xl font-extrabold tracking-tight">
+                  R$ 9,90<span className="text-base font-medium text-muted"> /mês</span>
+                </p>
+                <p className="mt-2 text-sm text-muted">Para usar todo dia, sem limites.</p>
+                <ul className="mt-6 flex flex-col gap-3 text-[15px]">
+                  {[
+                    "Registros de glicemia ilimitados",
+                    "Lembretes de basal, medições e remedição",
+                    "Tudo do plano gratuito",
+                    "Cancele quando quiser, sem multa",
+                  ].map((t) => (
+                    <li key={t} className="flex items-start gap-2.5">
+                      <CircleCheck size={18} className="mt-0.5 shrink-0 text-primary" />
+                      {t}
+                    </li>
+                  ))}
+                </ul>
+                <a
+                  href={LINK_ASSINAR}
+                  {...propsAssinar}
+                  className="mt-8 inline-flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-5 py-3 text-[15px] font-semibold text-primary-foreground shadow-lg shadow-primary/30 transition hover:brightness-105"
+                >
+                  Começar o teste grátis <ArrowRight size={17} />
+                </a>
+              </div>
+            </div>
+            <p className="mt-6 text-center text-sm text-muted">
+              Pagamento seguro pelo Stripe, direto no painel. Seus dados de cartão não passam pelo GlicAI.
+            </p>
           </div>
         </section>
 

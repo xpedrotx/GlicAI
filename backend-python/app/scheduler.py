@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from app.services import remedicao
+from app.services import planos, remedicao
 from app.services.confirmacoes import verificar_pendentes
 from app.services.monitoramento import verificar_uso_banco
 from app.services.relatorios import verificar_relatorios_periodicos
@@ -86,6 +86,9 @@ async def _checar_lembretes() -> None:
         usuario = usuarios_por_id.get(lembrete["usuario_id"])
         if not usuario or usuario.get("status_cadastro") != "completo":
             continue
+        # Plano gratuito (depois dos 7 dias de teste) não recebe lembretes.
+        if not planos.tem_acesso_completo(usuario):
+            continue
 
         agora = agora_usuario(usuario.get("timezone") or "America/Sao_Paulo")
         horario_lembrete = str(lembrete["horario"])[:5]
@@ -113,6 +116,7 @@ def iniciar_scheduler() -> AsyncIOScheduler:
     scheduler.add_job(
         verificar_relatorios_periodicos, CronTrigger(minute="*/10"), id="verificar_relatorios", replace_existing=True
     )
+    scheduler.add_job(planos.avisar_fim_do_teste, CronTrigger(minute=5), id="avisar_fim_teste", replace_existing=True)
     scheduler.add_job(
         verificar_uso_banco, CronTrigger(hour=6, minute=0), id="verificar_uso_banco", replace_existing=True
     )

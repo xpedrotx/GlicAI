@@ -77,3 +77,17 @@ export type ItemEstoque = {
   quantidade_por_reposicao: number;
   limite_alerta: number;
 };
+
+export type Plano = {
+  plano: "trial" | "free" | "pro";
+  cortesia: boolean;
+  teste_termina_em: string | null;
+  dias_restantes_teste: number | null;
+  assinatura_status: string | null;
+  renova_em: string | null;
+  cancela_no_fim: boolean;
+  tem_cliente_stripe: boolean;
+  preco: string;
+  medicoes_por_dia_free: number;
+  pagamentos_disponiveis: boolean;
+};
