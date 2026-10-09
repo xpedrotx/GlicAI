@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { BadgeCheck, Check, CreditCard, ExternalLink, Sparkles, TriangleAlert } from "lucide-react";
+import { BadgeCheck, Check, CreditCard, FileText, Receipt, Sparkles, TriangleAlert } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
-import type { Plano } from "@/lib/types";
-import { Button, Card, ErrorText, PageHeader, Skeleton } from "@/components/ui";
-import { FormularioCartao } from "@/components/formulario-cartao";
+import type { DadosPagamento, Plano } from "@/lib/types";
+import { Button, Card, CardTitulo, ErrorText, PageHeader, Skeleton } from "@/components/ui";
+import { FormularioCartao, FormularioTrocaCartao } from "@/components/formulario-cartao";
 
 const BENEFICIOS = [
   "Registros de glicemia ilimitados no WhatsApp",
@@ -23,7 +23,6 @@ export default function AssinaturaPage() {
   const [plano, setPlano] = useState<Plano | null>(null);
   const [erro, setErro] = useState("");
   const [recemAssinou, setRecemAssinou] = useState(false);
-  const [abrindoPortal, setAbrindoPortal] = useState(false);
 
   useEffect(() => {
     api
@@ -31,18 +30,6 @@ export default function AssinaturaPage() {
       .then(setPlano)
       .catch(() => setErro("Não consegui carregar sua assinatura agora. Tente de novo em instantes."));
   }, []);
-
-  async function gerenciar() {
-    setErro("");
-    setAbrindoPortal(true);
-    try {
-      const { url } = await api.abrirPortal();
-      window.location.href = url;
-    } catch (e) {
-      setErro(e instanceof ApiError ? e.message : "Não consegui abrir o portal agora.");
-      setAbrindoPortal(false);
-    }
-  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -62,8 +49,10 @@ export default function AssinaturaPage() {
 
       {!plano && !erro && <Skeleton className="h-[420px] max-w-2xl" />}
 
-      {plano?.plano === "pro" && (
-        <CartaoPro plano={plano} aoAtualizar={setPlano} aoAbrirPortal={gerenciar} abrindoPortal={abrindoPortal} />
+      {plano?.plano === "pro" && <CartaoPro plano={plano} aoAtualizar={setPlano} />}
+
+      {plano && plano.tem_cliente_stripe && (
+        <PagamentoEFaturas plano={plano} podeTrocarCartao={plano.plano === "pro" && !plano.cortesia} />
       )}
 
       {plano && plano.plano !== "pro" && (
@@ -133,17 +122,7 @@ export default function AssinaturaPage() {
   );
 }
 
-function CartaoPro({
-  plano,
-  aoAtualizar,
-  aoAbrirPortal,
-  abrindoPortal,
-}: {
-  plano: Plano;
-  aoAtualizar: (p: Plano) => void;
-  aoAbrirPortal: () => void;
-  abrindoPortal: boolean;
-}) {
+function CartaoPro({ plano, aoAtualizar }: { plano: Plano; aoAtualizar: (p: Plano) => void }) {
   const [confirmando, setConfirmando] = useState(false);
   const [ocupado, setOcupado] = useState(false);
   const [erro, setErro] = useState("");
@@ -230,19 +209,158 @@ function CartaoPro({
           <div className="mt-3">
             <ErrorText>{erro}</ErrorText>
           </div>
-
-          {plano.tem_cliente_stripe && (
-            <button
-              type="button"
-              onClick={aoAbrirPortal}
-              disabled={abrindoPortal}
-              className="mt-4 inline-flex items-center gap-1.5 text-sm font-medium text-muted transition hover:text-foreground disabled:opacity-60"
-            >
-              <ExternalLink size={14} /> Trocar cartão e ver faturas
-            </button>
-          )}
         </div>
       )}
     </Card>
+  );
+}
+
+const MARCAS: Record<string, string> = {
+  visa: "Visa",
+  mastercard: "Mastercard",
+  amex: "American Express",
+  elo: "Elo",
+  diners: "Diners",
+  discover: "Discover",
+  hipercard: "Hipercard",
+};
+
+const STATUS_FATURA: Record<string, { rotulo: string; cor: string }> = {
+  paga: { rotulo: "Paga", cor: "text-verde bg-verde/10" },
+  em_aberto: { rotulo: "Em aberto", cor: "text-accent bg-accent/15" },
+  nao_paga: { rotulo: "Não paga", cor: "text-vermelho bg-vermelho/10" },
+  cancelada: { rotulo: "Cancelada", cor: "text-muted bg-surface" },
+  outra: { rotulo: "—", cor: "text-muted bg-surface" },
+};
+
+function PagamentoEFaturas({ plano, podeTrocarCartao }: { plano: Plano; podeTrocarCartao: boolean }) {
+  const [dados, setDados] = useState<DadosPagamento | null>(null);
+  const [falhou, setFalhou] = useState(false);
+  const [trocando, setTrocando] = useState(false);
+  const [aviso, setAviso] = useState("");
+
+  useEffect(() => {
+    api
+      .dadosPagamento()
+      .then(setDados)
+      .catch(() => setFalhou(true));
+  }, []);
+
+  async function recarregar() {
+    setDados(await api.dadosPagamento().catch(() => dados));
+  }
+
+  if (falhou) return null;
+  if (!dados) return <Skeleton className="h-[160px] max-w-2xl" />;
+
+  const cartao = dados.cartao;
+  const marca = cartao?.marca ? (MARCAS[cartao.marca] ?? cartao.marca) : "Cartão";
+
+  return (
+    <>
+      {(cartao || podeTrocarCartao) && (
+        <Card className="w-full max-w-2xl">
+          <CardTitulo icone={<CreditCard size={18} />} titulo="Forma de pagamento" descricao="Cartão usado nas cobranças mensais." />
+
+          {cartao && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border px-4 py-3.5">
+              <div>
+                <p className="font-semibold">
+                  {marca} •••• {cartao.final}
+                </p>
+                {cartao.mes && cartao.ano && (
+                  <p className="text-xs text-muted">
+                    Vence em {String(cartao.mes).padStart(2, "0")}/{cartao.ano}
+                  </p>
+                )}
+              </div>
+              {podeTrocarCartao && !trocando && (
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    setAviso("");
+                    setTrocando(true);
+                  }}
+                >
+                  Trocar cartão
+                </Button>
+              )}
+            </div>
+          )}
+
+          {aviso && <p className="mt-4 rounded-xl border border-verde/30 bg-verde/10 px-3.5 py-2.5 text-sm">{aviso}</p>}
+
+          {trocando && plano.publishable_key && (
+            <div className="mt-5 border-t border-border pt-5">
+              <p className="mb-4 text-sm text-muted">
+                Digite o novo cartão. Ele passa a valer para as próximas cobranças e o cartão antigo é removido.
+              </p>
+              <FormularioTrocaCartao
+                publishableKey={plano.publishable_key}
+                aoCancelar={() => setTrocando(false)}
+                aoConcluir={() => {
+                  setTrocando(false);
+                  setAviso("Cartão atualizado com sucesso.");
+                  recarregar();
+                }}
+              />
+            </div>
+          )}
+        </Card>
+      )}
+
+      <Card className="w-full max-w-2xl p-0">
+        <div className="px-6 pt-6">
+          <CardTitulo icone={<Receipt size={18} />} titulo="Faturas" descricao="Seu histórico de cobranças." />
+        </div>
+        {dados.faturas.length === 0 ? (
+          <p className="px-6 pb-6 text-sm text-muted">Nenhuma fatura ainda.</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-y border-border text-left text-xs font-medium text-muted">
+                  <th className="px-6 py-3 font-medium">Data</th>
+                  <th className="px-4 py-3 font-medium">Valor</th>
+                  <th className="px-4 py-3 font-medium">Situação</th>
+                  <th className="px-6 py-3 text-right font-medium">Comprovante</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dados.faturas.map((f) => {
+                  const st = STATUS_FATURA[f.status] ?? STATUS_FATURA.outra;
+                  const link = f.pdf ?? f.url;
+                  return (
+                    <tr key={f.id} className="border-b border-border last:border-0">
+                      <td className="whitespace-nowrap px-6 py-3">{formatarData(f.data)}</td>
+                      <td className="whitespace-nowrap px-4 py-3 font-medium">
+                        {f.valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${st.cor}`}>{st.rotulo}</span>
+                      </td>
+                      <td className="px-6 py-3 text-right">
+                        {link ? (
+                          <a
+                            href={link}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 font-medium text-primary hover:underline"
+                          >
+                            <FileText size={14} /> PDF
+                          </a>
+                        ) : (
+                          <span className="text-muted">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+    </>
   );
 }

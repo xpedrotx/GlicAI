@@ -412,15 +412,6 @@ def test_assinar_recusa_metodo_de_pagamento_invalido(stripe_configurado):
         _executar(pagamentos.assinar({"id": "u1"}, "tok_qualquer"))
 
 
-def test_portal_exige_cliente_do_stripe(stripe_configurado):
-    with pytest.raises(ValueError):
-        _executar(pagamentos.criar_portal({"id": "u1"}))
-
-    abrir = AsyncMock(return_value={"url": "https://billing.stripe.com/p/x"})
-    with patch.object(stripe.billing_portal.Session, "create_async", new=abrir):
-        assert _executar(pagamentos.criar_portal({"id": "u1", "stripe_customer_id": "cus_1"})) == "https://billing.stripe.com/p/x"
-
-
 def test_evento_de_fatura_paga_sincroniza_a_assinatura(stripe_configurado):
     sincronizar = AsyncMock()
     with patch.object(pagamentos, "sincronizar_assinatura", new=sincronizar):
@@ -553,3 +544,116 @@ def test_rota_de_cancelar_traduz_os_erros(stripe_configurado):
     with pytest.raises(HTTPException) as erro:
         _executar(web_api.cancelar_assinatura(usuario={"id": "u1", "teste_termina_em": _dias(-1)}))
     assert erro.value.status_code == 400
+
+
+# --------------------------------------------------------------------------
+# Cartão e faturas no próprio site
+# --------------------------------------------------------------------------
+
+def test_dados_pagamento_mostra_cartao_e_faturas_sem_rascunhos(stripe_configurado):
+    usuario = {"id": "u1", "stripe_customer_id": "cus_1", "stripe_subscription_id": "sub_1", "assinatura_status": "active"}
+    assinatura = _obj({"id": "sub_1", "default_payment_method": {"id": "pm_1", "card": {"brand": "visa", "last4": "4242", "exp_month": 3, "exp_year": 2033}}})
+    faturas = _obj({"data": [
+        {"id": "in_1", "created": 1_800_000_000, "total": 990, "status": "paid", "invoice_pdf": "https://pdf", "hosted_invoice_url": "https://url"},
+        {"id": "in_2", "created": 1_790_000_000, "total": 990, "status": "open", "invoice_pdf": None, "hosted_invoice_url": None},
+        {"id": "in_3", "created": 1_780_000_000, "total": 0, "status": "draft"},
+    ]})
+
+    with patch.object(stripe.Subscription, "retrieve_async", new=AsyncMock(return_value=assinatura)), \
+         patch.object(stripe.Invoice, "list_async", new=AsyncMock(return_value=faturas)):
+        dados = _executar(pagamentos.dados_pagamento(usuario))
+
+    assert dados["cartao"] == {"marca": "visa", "final": "4242", "mes": 3, "ano": 2033}
+    assert [(f["id"], f["valor"], f["status"]) for f in dados["faturas"]] == [("in_1", 9.9, "paga"), ("in_2", 9.9, "em_aberto")]
+    assert dados["faturas"][0]["pdf"] == "https://pdf"
+
+
+def test_dados_pagamento_sem_cliente_no_stripe_vem_vazio(stripe_configurado):
+    assert _executar(pagamentos.dados_pagamento({"id": "u1"})) == {"cartao": None, "faturas": []}
+
+
+def test_dados_pagamento_de_quem_cancelou_usa_o_cartao_do_cliente(stripe_configurado):
+    usuario = {"id": "u1", "stripe_customer_id": "cus_1", "stripe_subscription_id": "sub_1", "assinatura_status": "canceled"}
+    cliente = _obj({"invoice_settings": {"default_payment_method": {"card": {"brand": "mastercard", "last4": "4444", "exp_month": 1, "exp_year": 2030}}}})
+    buscar_assinatura = AsyncMock()
+
+    with patch.object(stripe.Subscription, "retrieve_async", new=buscar_assinatura), \
+         patch.object(stripe.Customer, "retrieve_async", new=AsyncMock(return_value=cliente)), \
+         patch.object(stripe.Invoice, "list_async", new=AsyncMock(return_value=_obj({"data": []}))):
+        dados = _executar(pagamentos.dados_pagamento(usuario))
+
+    buscar_assinatura.assert_not_awaited()
+    assert dados["cartao"]["final"] == "4444"
+
+
+def _usuario_assinante(**extra):
+    return {"id": "u1", "stripe_customer_id": "cus_1", "stripe_subscription_id": "sub_1", "assinatura_status": "active", **extra}
+
+
+def test_trocar_cartao_define_o_novo_como_padrao_e_remove_o_antigo(stripe_configurado):
+    fake = FakeSupabase()
+    _ligar(fake)
+    usuario = _usuario(fake, teste_termina_em=_dias(-10), stripe_customer_id="cus_1", stripe_subscription_id="sub_1", assinatura_status="active")
+    assinatura = _assinatura(default_payment_method="pm_antigo", metadata={"usuario_id": usuario["id"]})
+    modificar_cliente, modificar_assinatura, remover = AsyncMock(), AsyncMock(), AsyncMock()
+
+    with patch.object(stripe.PaymentMethod, "retrieve_async", new=AsyncMock(return_value=_obj({"id": "pm_novo", "customer": "cus_1"}))), \
+         patch.object(stripe.Subscription, "retrieve_async", new=AsyncMock(return_value=assinatura)), \
+         patch.object(stripe.Customer, "modify_async", new=modificar_cliente), \
+         patch.object(stripe.Subscription, "modify_async", new=modificar_assinatura), \
+         patch.object(stripe.PaymentMethod, "detach_async", new=remover):
+        resultado = _executar(pagamentos.confirmar_troca_cartao(usuario, "pm_novo"))
+
+    assert resultado["status"] == "ok"
+    modificar_cliente.assert_awaited_once_with("cus_1", invoice_settings={"default_payment_method": "pm_novo"})
+    modificar_assinatura.assert_awaited_once_with("sub_1", default_payment_method="pm_novo")
+    remover.assert_awaited_once_with("pm_antigo")
+
+
+def test_trocar_cartao_recusa_cartao_de_outro_cliente(stripe_configurado):
+    modificar = AsyncMock()
+    with patch.object(stripe.PaymentMethod, "retrieve_async", new=AsyncMock(return_value=_obj({"id": "pm_x", "customer": "cus_OUTRO"}))), \
+         patch.object(stripe.Customer, "modify_async", new=modificar), \
+         patch.object(stripe.Subscription, "modify_async", new=modificar):
+        with pytest.raises(PermissionError):
+            _executar(pagamentos.confirmar_troca_cartao(_usuario_assinante(), "pm_x"))
+    modificar.assert_not_awaited()
+
+
+def test_trocar_cartao_exige_assinatura_ativa_e_id_valido(stripe_configurado):
+    for usuario in ({"id": "u1"}, _usuario_assinante(assinatura_status="canceled")):
+        with pytest.raises(ValueError):
+            _executar(pagamentos.confirmar_troca_cartao(usuario, "pm_x"))
+    with pytest.raises(ValueError):
+        _executar(pagamentos.confirmar_troca_cartao(_usuario_assinante(), "tok_qualquer"))
+    with pytest.raises(ValueError):
+        _executar(pagamentos.preparar_troca_cartao({"id": "u1"}))
+
+
+def test_trocar_cartao_com_fatura_em_atraso_tenta_cobrar_de_novo(stripe_configurado):
+    fake = FakeSupabase()
+    _ligar(fake)
+    usuario = _usuario(fake, teste_termina_em=_dias(-10), stripe_customer_id="cus_1", stripe_subscription_id="sub_1", assinatura_status="past_due")
+    assinatura = _assinatura("past_due", latest_invoice="in_aberta", metadata={"usuario_id": usuario["id"]})
+    cobrar = AsyncMock()
+
+    with patch.object(stripe.PaymentMethod, "retrieve_async", new=AsyncMock(return_value=_obj({"id": "pm_novo", "customer": "cus_1"}))), \
+         patch.object(stripe.Subscription, "retrieve_async", new=AsyncMock(return_value=assinatura)), \
+         patch.object(stripe.Customer, "modify_async", new=AsyncMock()), \
+         patch.object(stripe.Subscription, "modify_async", new=AsyncMock()), \
+         patch.object(stripe.Invoice, "pay_async", new=cobrar):
+        _executar(pagamentos.confirmar_troca_cartao(usuario, "pm_novo"))
+
+    cobrar.assert_awaited_once_with("in_aberta", payment_method="pm_novo")
+
+
+def test_preparar_troca_de_cartao_so_aceita_cartao(stripe_configurado):
+    criar = AsyncMock(return_value=_obj({"client_secret": "seti_1_secret_x"}))
+    with patch.object(stripe.SetupIntent, "create_async", new=criar):
+        resultado = _executar(pagamentos.preparar_troca_cartao(_usuario_assinante()))
+
+    assert resultado == {"client_secret": "seti_1_secret_x", "publishable_key": "pk_test_x"}
+    params = criar.await_args.kwargs
+    assert params["customer"] == "cus_1" and params["usage"] == "off_session"
+    assert params["automatic_payment_methods"] == {"enabled": True, "allow_redirects": "never"}
+    assert "payment_method_types" not in params  # a API nova do Stripe recusa esse parâmetro

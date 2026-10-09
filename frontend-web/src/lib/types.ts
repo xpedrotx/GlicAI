@@ -78,6 +78,20 @@ export type ItemEstoque = {
   limite_alerta: number;
 };
 
+export type Fatura = {
+  id: string;
+  data: string;
+  valor: number;
+  status: "paga" | "em_aberto" | "nao_paga" | "cancelada" | "outra";
+  pdf: string | null;
+  url: string | null;
+};
+
+export type DadosPagamento = {
+  cartao: { marca: string | null; final: string | null; mes: number | null; ano: number | null } | null;
+  faturas: Fatura[];
+};
+
 export type Plano = {
   plano: "trial" | "free" | "pro";
   cortesia: boolean;

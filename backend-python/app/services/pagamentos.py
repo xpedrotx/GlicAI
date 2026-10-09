@@ -228,20 +228,129 @@ async def alterar_cancelamento(usuario: dict, cancelar: bool) -> dict:
     }
 
 
-async def criar_portal(usuario: dict) -> str:
-    """URL do portal do Stripe pra trocar cartão, ver faturas ou cancelar."""
+_STATUS_FATURA = {"paid": "paga", "open": "em_aberto", "uncollectible": "nao_paga", "void": "cancelada"}
+
+
+def _cartao_de(pm) -> dict | None:
+    pm = pm if isinstance(pm, dict) else None
+    cartao = (pm or {}).get("card")
+    if not cartao:
+        return None
+    return {"marca": cartao.get("brand"), "final": cartao.get("last4"), "mes": cartao.get("exp_month"), "ano": cartao.get("exp_year")}
+
+
+async def dados_pagamento(usuario: dict) -> dict:
+    """Cartão atual e faturas do paciente, pra mostrar na página (sem mandar pro portal do Stripe)."""
+    _exigir_configurado()
+    cliente_id = usuario.get("stripe_customer_id")
+    if not cliente_id:
+        return {"cartao": None, "faturas": []}
+
+    try:
+        pm = None
+        assinatura_id = usuario.get("stripe_subscription_id")
+        if assinatura_id and usuario.get("assinatura_status") in ("active", "trialing", "past_due"):
+            assinatura = _dict(await stripe.Subscription.retrieve_async(assinatura_id, expand=["default_payment_method"]))
+            pm = assinatura.get("default_payment_method")
+        if not pm:
+            cliente = _dict(
+                await stripe.Customer.retrieve_async(cliente_id, expand=["invoice_settings.default_payment_method"])
+            )
+            pm = (cliente.get("invoice_settings") or {}).get("default_payment_method")
+        lista = _dict(await stripe.Invoice.list_async(customer=cliente_id, limit=12))
+    except stripe.StripeError as erro:
+        logger.exception("Falha ao buscar cartão/faturas do usuário %s", usuario["id"])
+        raise PagamentosIndisponiveis() from erro
+
+    faturas = [
+        {
+            "id": f["id"],
+            "data": datetime.fromtimestamp(f["created"], tz=timezone.utc).isoformat(),
+            "valor": (f.get("total") or 0) / 100,
+            "status": _STATUS_FATURA.get(f.get("status"), "outra"),
+            "pdf": f.get("invoice_pdf"),
+            "url": f.get("hosted_invoice_url"),
+        }
+        for f in lista.get("data", [])
+        if f.get("status") != "draft"
+    ]
+    return {"cartao": _cartao_de(pm), "faturas": faturas}
+
+
+async def preparar_troca_cartao(usuario: dict) -> dict:
+    """
+    1º passo de trocar o cartão: um SetupIntent, que deixa o navegador validar o
+    cartão novo (inclusive o 3D Secure do banco) sem cobrar nada.
+    """
     _exigir_configurado()
     if not usuario.get("stripe_customer_id"):
         raise ValueError("sem cliente no Stripe")
     try:
-        portal = await stripe.billing_portal.Session.create_async(
-            customer=usuario["stripe_customer_id"],
-            return_url=f"{site_url()}/dashboard/assinatura",
+        intencao = _dict(
+            await stripe.SetupIntent.create_async(
+                customer=usuario["stripe_customer_id"],
+                usage="off_session",
+                # só cartão: sem meios de pagamento que redirecionam pra fora do site
+                automatic_payment_methods={"enabled": True, "allow_redirects": "never"},
+                metadata={"usuario_id": usuario["id"]},
+            )
         )
     except stripe.StripeError as erro:
-        logger.exception("Falha ao abrir portal do usuário %s", usuario["id"])
+        logger.exception("Falha ao preparar troca de cartão do usuário %s", usuario["id"])
         raise PagamentosIndisponiveis() from erro
-    return portal["url"]
+    return {"client_secret": intencao["client_secret"], "publishable_key": settings.stripe_publishable_key}
+
+
+async def _aplicar_cartao(cliente_id: str, assinatura_id: str, metodo_id: str, em_atraso: bool) -> None:
+    """Só fala com o Stripe: troca o cartão padrão e, se a fatura estava em atraso, tenta cobrar de novo."""
+    try:
+        assinatura = _dict(await stripe.Subscription.retrieve_async(assinatura_id))
+        antigo = assinatura.get("default_payment_method")
+        antigo = antigo if isinstance(antigo, str) else (antigo or {}).get("id")
+
+        await stripe.Customer.modify_async(cliente_id, invoice_settings={"default_payment_method": metodo_id})
+        await stripe.Subscription.modify_async(assinatura_id, default_payment_method=metodo_id)
+
+        if em_atraso:
+            fatura = assinatura.get("latest_invoice")
+            fatura_id = fatura if isinstance(fatura, str) else (fatura or {}).get("id")
+            if fatura_id:
+                await stripe.Invoice.pay_async(fatura_id, payment_method=metodo_id)
+    except stripe.CardError as erro:
+        raise CartaoRecusado(_mensagem_recusa(erro.decline_code or erro.code)) from erro
+    except stripe.StripeError as erro:
+        logger.exception("Falha ao trocar o cartão da assinatura %s", assinatura_id)
+        raise PagamentosIndisponiveis() from erro
+
+    # O cartão antigo sai do Stripe: não fica guardado à toa
+    if antigo and antigo != metodo_id:
+        try:
+            await stripe.PaymentMethod.detach_async(antigo)
+        except stripe.StripeError:
+            logger.warning("Não consegui remover o cartão antigo %s", antigo)
+
+
+async def confirmar_troca_cartao(usuario: dict, metodo_id: str) -> dict:
+    """2º passo: com o cartão novo já validado no navegador, vira o cartão padrão da assinatura."""
+    _exigir_configurado()
+    cliente_id = usuario.get("stripe_customer_id")
+    assinatura_id = usuario.get("stripe_subscription_id")
+    if not cliente_id or not assinatura_id or usuario.get("assinatura_status") not in ("active", "trialing", "past_due"):
+        raise ValueError("sem assinatura ativa")
+    if not metodo_id.startswith("pm_"):
+        raise ValueError("método de pagamento inválido")
+
+    try:
+        pm = _dict(await stripe.PaymentMethod.retrieve_async(metodo_id))
+    except stripe.StripeError as erro:
+        raise PagamentosIndisponiveis() from erro
+    # Só aceita cartão que está preso AO CLIENTE desta conta — nunca um pm_ qualquer
+    if pm.get("customer") != cliente_id:
+        raise PermissionError("cartão de outro cliente")
+
+    await _aplicar_cartao(cliente_id, assinatura_id, metodo_id, usuario.get("assinatura_status") == "past_due")
+    atualizado = await sincronizar_assinatura(assinatura_id, usuario_id=usuario["id"])
+    return {"status": "ok", "plano": (atualizado or usuario).get("assinatura_status")}
 
 
 def _fim_do_periodo(assinatura) -> datetime | None:

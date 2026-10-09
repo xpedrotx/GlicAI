@@ -263,11 +263,38 @@ async def reativar_assinatura(usuario: dict = Depends(usuario_atual)):
     return await _alterar_cancelamento(usuario, False)
 
 
-@router.post("/plano/portal")
-async def abrir_portal(usuario: dict = Depends(usuario_atual)):
+@router.get("/plano/pagamento")
+async def dados_pagamento(usuario: dict = Depends(usuario_atual)):
+    """Cartão atual e faturas — mostrados no próprio site, sem o portal do Stripe."""
     try:
-        return {"url": await pagamentos.criar_portal(usuario)}
+        return await pagamentos.dados_pagamento(usuario)
+    except pagamentos.PagamentosIndisponiveis as erro:
+        raise HTTPException(status_code=503, detail="Pagamentos indisponíveis no momento.") from erro
+
+
+@router.post("/plano/cartao/preparar")
+async def preparar_troca_cartao(usuario: dict = Depends(usuario_atual)):
+    try:
+        return await pagamentos.preparar_troca_cartao(usuario)
     except ValueError as erro:
         raise HTTPException(status_code=400, detail="Você ainda não tem uma assinatura.") from erro
+    except pagamentos.PagamentosIndisponiveis as erro:
+        raise HTTPException(status_code=503, detail="Pagamentos indisponíveis no momento.") from erro
+
+
+class TrocarCartaoBody(BaseModel):
+    metodo_pagamento_id: str
+
+
+@router.post("/plano/cartao/confirmar")
+async def confirmar_troca_cartao(body: TrocarCartaoBody, usuario: dict = Depends(usuario_atual)):
+    try:
+        return await pagamentos.confirmar_troca_cartao(usuario, body.metodo_pagamento_id.strip())
+    except ValueError as erro:
+        raise HTTPException(status_code=400, detail="Você não tem uma assinatura ativa.") from erro
+    except PermissionError as erro:
+        raise HTTPException(status_code=403, detail="Esse cartão não é seu.") from erro
+    except pagamentos.CartaoRecusado as erro:
+        raise HTTPException(status_code=402, detail=str(erro)) from erro
     except pagamentos.PagamentosIndisponiveis as erro:
         raise HTTPException(status_code=503, detail="Pagamentos indisponíveis no momento.") from erro

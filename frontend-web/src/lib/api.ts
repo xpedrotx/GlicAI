@@ -6,7 +6,7 @@
  * o cookie httpOnly de sessão (glicai_sessao) seja enviado nas chamadas.
  */
 
-import type { Convite, Cuidador, HbA1c, Historico, ItemEstoque, Padroes, PerfilCompleto, MedicoEu, MedicoVinculado, Plano, Relatorio, ResultadoAssinatura, ResultadoVinculo, ResumoPaciente } from "./types";
+import type { Convite, DadosPagamento, Cuidador, HbA1c, Historico, ItemEstoque, Padroes, PerfilCompleto, MedicoEu, MedicoVinculado, Plano, Relatorio, ResultadoAssinatura, ResultadoVinculo, ResumoPaciente } from "./types";
 
 export class ApiError extends Error {
   status: number;
@@ -109,7 +109,16 @@ export const api = {
 
   reativarAssinatura: () => chamar<Plano>("/dashboard/plano/reativar", { method: "POST" }),
 
-  abrirPortal: () => chamar<{ url: string }>("/dashboard/plano/portal", { method: "POST" }),
+  dadosPagamento: () => chamar<DadosPagamento>("/dashboard/plano/pagamento"),
+
+  prepararTrocaCartao: () =>
+    chamar<{ client_secret: string; publishable_key: string }>("/dashboard/plano/cartao/preparar", { method: "POST" }),
+
+  confirmarTrocaCartao: (metodoPagamentoId: string) =>
+    chamar<{ status: string }>("/dashboard/plano/cartao/confirmar", {
+      method: "POST",
+      body: JSON.stringify({ metodo_pagamento_id: metodoPagamentoId }),
+    }),
   // --- Lado do paciente: médicos que acompanham ---
   medicosVinculados: () => chamar<{ medicos: MedicoVinculado[] }>("/dashboard/medicos"),
 

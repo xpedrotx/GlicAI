@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { CardCvcElement, CardExpiryElement, CardNumberElement, Elements, useElements, useStripe } from "@stripe/react-stripe-js";
-import { loadStripe } from "@stripe/stripe-js";
+import { loadStripe, type Stripe, type StripeCardNumberElement } from "@stripe/stripe-js";
 import { useTheme } from "next-themes";
 import { Lock } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
@@ -13,8 +13,15 @@ import { Button, ErrorText, Field, Label } from "@/components/ui";
  * Formulário de cartão dentro da nossa página (Stripe Elements). Os três
  * campos são iframes do Stripe: número, validade e CVC vão direto do navegador
  * pro Stripe e nunca passam pelo nosso servidor — a gente só recebe o id do
- * cartão (pm_...) que o Stripe gera, e manda pro backend criar a assinatura.
+ * cartão (pm_...) que o Stripe gera.
+ *
+ * Serve a dois fluxos: assinar o plano (FormularioCartao) e trocar o cartão
+ * de quem já assina (FormularioTrocaCartao).
  */
+
+/** Faz o que o formulário existe pra fazer. Devolve uma mensagem de erro (ou null se deu certo). */
+type Acao = (stripe: Stripe, numero: StripeCardNumberElement) => Promise<string | null>;
+
 export function FormularioCartao({
   publishableKey,
   preco,
@@ -24,17 +31,80 @@ export function FormularioCartao({
   preco: string;
   aoConcluir: (plano: Plano) => void;
 }) {
+  const acao: Acao = async (stripe, numero) => {
+    const { paymentMethod, error } = await stripe.createPaymentMethod({
+      type: "card",
+      card: numero,
+      billing_details: { address: { country: "BR" } },
+    });
+    if (error || !paymentMethod) return error?.message ?? "Não consegui validar o cartão. Confira os dados.";
+
+    let resultado = await api.assinar(paymentMethod.id);
+
+    if (resultado.status === "requer_acao") {
+      // O banco pediu autenticação (3D Secure): o Stripe abre a janela dele
+      const { error: erroAutenticacao } = await stripe.confirmCardPayment(resultado.client_secret);
+      if (erroAutenticacao) return erroAutenticacao.message ?? "Não foi possível autenticar o pagamento.";
+      const confirmado = await api.confirmarAssinatura(resultado.assinatura_id);
+      if (confirmado.status !== "ok") {
+        return "O pagamento ainda não foi confirmado. Aguarde alguns instantes e atualize a página.";
+      }
+      resultado = { ...confirmado, status: "ok" };
+    }
+
+    aoConcluir(resultado as Plano);
+    return null;
+  };
+
+  return (
+    <ComElements publishableKey={publishableKey}>
+      <CamposCartao acao={acao} rotulo={`Assinar por ${preco}`} />
+    </ComElements>
+  );
+}
+
+export function FormularioTrocaCartao({
+  publishableKey,
+  aoConcluir,
+  aoCancelar,
+}: {
+  publishableKey: string;
+  aoConcluir: () => void;
+  aoCancelar: () => void;
+}) {
+  const acao: Acao = async (stripe, numero) => {
+    const { client_secret } = await api.prepararTrocaCartao();
+    // confirmCardSetup valida o cartão novo (e o 3D Secure do banco, se pedir) sem cobrar nada
+    const { setupIntent, error } = await stripe.confirmCardSetup(client_secret, {
+      payment_method: { card: numero, billing_details: { address: { country: "BR" } } },
+    });
+    if (error || !setupIntent?.payment_method) return error?.message ?? "Não consegui validar o cartão. Confira os dados.";
+
+    const metodo = setupIntent.payment_method;
+    await api.confirmarTrocaCartao(typeof metodo === "string" ? metodo : metodo.id);
+    aoConcluir();
+    return null;
+  };
+
+  return (
+    <ComElements publishableKey={publishableKey}>
+      <CamposCartao acao={acao} rotulo="Salvar novo cartão" aoCancelar={aoCancelar} />
+    </ComElements>
+  );
+}
+
+function ComElements({ publishableKey, children }: { publishableKey: string; children: React.ReactNode }) {
   const stripe = useMemo(() => loadStripe(publishableKey), [publishableKey]);
   return (
     <Elements stripe={stripe} options={{ locale: "pt-BR" }}>
-      <Campos preco={preco} aoConcluir={aoConcluir} />
+      {children}
     </Elements>
   );
 }
 
 type Campo = "numero" | "validade" | "cvc";
 
-function Campos({ preco, aoConcluir }: { preco: string; aoConcluir: (plano: Plano) => void }) {
+function CamposCartao({ acao, rotulo, aoCancelar }: { acao: Acao; rotulo: string; aoCancelar?: () => void }) {
   const stripe = useStripe();
   const elements = useElements();
   const { resolvedTheme } = useTheme();
@@ -79,36 +149,10 @@ function Campos({ preco, aoConcluir }: { preco: string; aoConcluir: (plano: Plan
     setErro("");
     setEnviando(true);
     try {
-      const { paymentMethod, error } = await stripe.createPaymentMethod({
-        type: "card",
-        card: numero,
-        billing_details: { address: { country: "BR" } },
-      });
-      if (error || !paymentMethod) {
-        setErro(error?.message ?? "Não consegui validar o cartão. Confira os dados.");
-        return;
-      }
-
-      let resultado = await api.assinar(paymentMethod.id);
-
-      if (resultado.status === "requer_acao") {
-        // O banco pediu autenticação (3D Secure): o Stripe abre a janela dele
-        const { error: erroAutenticacao } = await stripe.confirmCardPayment(resultado.client_secret);
-        if (erroAutenticacao) {
-          setErro(erroAutenticacao.message ?? "Não foi possível autenticar o pagamento.");
-          return;
-        }
-        const confirmado = await api.confirmarAssinatura(resultado.assinatura_id);
-        if (confirmado.status !== "ok") {
-          setErro("O pagamento ainda não foi confirmado. Aguarde alguns instantes e atualize a página.");
-          return;
-        }
-        resultado = { ...confirmado, status: "ok" };
-      }
-
-      aoConcluir(resultado as Plano);
+      const mensagem = await acao(stripe, numero);
+      if (mensagem) setErro(mensagem);
     } catch (e) {
-      setErro(e instanceof ApiError ? e.message : "Não consegui concluir o pagamento agora. Tente de novo.");
+      setErro(e instanceof ApiError ? e.message : "Não consegui concluir agora. Tente de novo.");
     } finally {
       setEnviando(false);
     }
@@ -163,10 +207,17 @@ function Campos({ preco, aoConcluir }: { preco: string; aoConcluir: (plano: Plan
 
       <ErrorText>{erro}</ErrorText>
 
-      <Button type="submit" carregando={enviando} disabled={!stripe || !pronto} className="mt-1 w-full py-3 sm:w-auto sm:self-start">
-        {!enviando && <Lock size={16} />}
-        {enviando ? "Processando..." : `Assinar por ${preco}`}
-      </Button>
+      <div className="mt-1 flex flex-wrap gap-2">
+        <Button type="submit" carregando={enviando} disabled={!stripe || !pronto} className="w-full py-3 sm:w-auto">
+          {!enviando && <Lock size={16} />}
+          {enviando ? "Processando..." : rotulo}
+        </Button>
+        {aoCancelar && (
+          <Button type="button" variant="ghost" onClick={aoCancelar} disabled={enviando} className="w-full py-3 sm:w-auto">
+            Cancelar
+          </Button>
+        )}
+      </div>
     </form>
   );
 }
