@@ -18,7 +18,7 @@
 #                 invoice.paid, invoice.payment_failed
 set -euo pipefail
 
-SERVIDOR="${GLICAI_SERVIDOR:-root@49.13.198.178}"
+SERVIDOR="${GLICAI_SERVIDOR:-root@179.199.154.194}"
 PASTA="${GLICAI_PASTA:-/root/glic.ia}"
 SITE="${GLICAI_SITE:-https://glicia.pedrotx.com.br}"
 
