@@ -27,6 +27,10 @@ logger = logging.getLogger("glicia.pagamentos")
 
 PRECO_CENTAVOS = 990
 _LOOKUP_KEY_PRECO = "glicai_pro_mensal"
+# Nome que aparece no extrato do cartão do paciente. A conta do Stripe é compartilhada
+# com outro produto (cujo nome é o padrão da conta), então o GlicAI define o dele no
+# produto — vale só pras assinaturas, até 22 letras, e o banco mostra em maiúsculas.
+DESCRITOR_EXTRATO = "GLICAI"
 _preco_em_cache: str | None = None
 
 
@@ -78,7 +82,7 @@ async def _preco_id() -> str:
                 unit_amount=PRECO_CENTAVOS,
                 recurring={"interval": "month"},
                 lookup_key=_LOOKUP_KEY_PRECO,
-                product_data={"name": "GlicAI Pro"},
+                product_data={"name": "GlicAI Pro", "statement_descriptor": DESCRITOR_EXTRATO},
             )
             preco_id = _dict(criado)["id"]
         except stripe.InvalidRequestError:

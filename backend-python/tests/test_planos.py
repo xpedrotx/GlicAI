@@ -657,3 +657,18 @@ def test_preparar_troca_de_cartao_so_aceita_cartao(stripe_configurado):
     assert params["customer"] == "cus_1" and params["usage"] == "off_session"
     assert params["automatic_payment_methods"] == {"enabled": True, "allow_redirects": "never"}
     assert "payment_method_types" not in params  # a API nova do Stripe recusa esse parâmetro
+
+
+def test_preco_novo_leva_o_nome_do_glicai_no_extrato_do_cartao(stripe_configurado, monkeypatch):
+    monkeypatch.setattr(pagamentos, "_preco_em_cache", None)
+    monkeypatch.setattr(settings, "stripe_price_id", "")
+    criar = AsyncMock(return_value=_obj({"id": "price_novo"}))
+
+    with patch.object(stripe.Price, "list_async", new=AsyncMock(return_value=_obj({"data": []}))), \
+         patch.object(stripe.Price, "create_async", new=criar):
+        assert _executar(pagamentos._preco_id()) == "price_novo"
+
+    produto = criar.await_args.kwargs["product_data"]
+    assert produto["statement_descriptor"] == "GLICAI"
+    assert len(pagamentos.DESCRITOR_EXTRATO) <= 22 and "BOLSO" not in pagamentos.DESCRITOR_EXTRATO
+    monkeypatch.setattr(pagamentos, "_preco_em_cache", None)
