@@ -446,6 +446,30 @@ _EVENTOS_ASSINATURA = {
 }
 
 
+async def _encerrar_por_reembolso(cobranca: dict) -> None:
+    """
+    Reembolso total da cobrança do período atual = fim da assinatura, na hora.
+    Sem isso o cliente recebe o dinheiro de volta mas segue com o Pro até a
+    renovação (e não consegue assinar de novo). Reembolso parcial, ou de uma
+    cobrança antiga, não mexe na assinatura.
+    """
+    if not cobranca.get("refunded"):
+        return
+    usuario = _buscar_usuario(None, cobranca.get("customer"))
+    assinatura_id = (usuario or {}).get("stripe_subscription_id")
+    if not usuario or not assinatura_id or usuario.get("assinatura_status") not in ("active", "trialing", "past_due"):
+        return
+
+    assinatura = _dict(await stripe.Subscription.retrieve_async(assinatura_id, expand=["latest_invoice.payments"]))
+    fatura = assinatura.get("latest_invoice")
+    if not isinstance(fatura, dict) or _id_do_pagamento(fatura) != cobranca.get("payment_intent"):
+        return  # reembolso de uma cobrança antiga: a assinatura atual segue valendo
+
+    await stripe.Subscription.cancel_async(assinatura_id)
+    await sincronizar_assinatura(assinatura_id, usuario_id=usuario["id"])
+    logger.info("Assinatura %s encerrada por reembolso total", assinatura_id)
+
+
 async def processar_evento(evento: dict) -> None:
     evento = _dict(evento)
     tipo = evento["type"]
@@ -453,6 +477,8 @@ async def processar_evento(evento: dict) -> None:
 
     if tipo in _EVENTOS_ASSINATURA:
         await sincronizar_assinatura(objeto["id"])
+    elif tipo == "charge.refunded":
+        await _encerrar_por_reembolso(objeto)
     elif tipo in ("invoice.payment_failed", "invoice.paid"):
         # Falha/sucesso de cobrança mexe no status (past_due <-> active).
         parent = objeto.get("parent") or {}

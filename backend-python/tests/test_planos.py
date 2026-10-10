@@ -723,3 +723,59 @@ def test_proxima_cobranca_agendada_cancelada_ou_inexistente(stripe_configurado):
     assert consultar() == {"data": "2026-11-09T12:00:00+00:00", "valor": 9.9, "status": "agendada"}
     assert consultar(assinatura_cancela_no_fim=True)["status"] == "cancelada"
     assert consultar(assinatura_status="canceled") is None
+
+
+# --------------------------------------------------------------------------
+# Reembolso total encerra a assinatura
+# --------------------------------------------------------------------------
+
+def _evento_reembolso(pi="pi_atual", reembolsada=True, cliente="cus_1"):
+    return _obj({"type": "charge.refunded", "data": {"object": {
+        "customer": cliente, "payment_intent": pi, "refunded": reembolsada, "amount_refunded": 990 if reembolsada else 400}}})
+
+
+def _assinatura_com_fatura(pi):
+    return _assinatura(latest_invoice={"id": "in_1", "payments": {"data": [{"payment": {"type": "payment_intent", "payment_intent": pi}}]}})
+
+
+def _cenario_reembolso(status="active"):
+    fake = FakeSupabase()
+    _ligar(fake)
+    _usuario(fake, teste_termina_em=_dias(-10), stripe_customer_id="cus_1", stripe_subscription_id="sub_1", assinatura_status=status)
+    return fake
+
+
+def test_reembolso_total_da_cobranca_atual_encerra_a_assinatura(stripe_configurado):
+    fake = _cenario_reembolso()
+    cancelar = AsyncMock()
+    encerrada = _assinatura("canceled", metadata={"usuario_id": fake.store["usuarios"][0]["id"]})
+
+    with patch.object(stripe.Subscription, "retrieve_async", new=AsyncMock(side_effect=[_assinatura_com_fatura("pi_atual"), encerrada])), \
+         patch.object(stripe.Subscription, "cancel_async", new=cancelar):
+        _executar(pagamentos.processar_evento(_evento_reembolso()))
+
+    cancelar.assert_awaited_once_with("sub_1")
+    salvo = fake.store["usuarios"][0]
+    assert salvo["assinatura_status"] == "canceled"
+    assert planos.plano_efetivo(salvo) == "free"  # sem o Pro: pode assinar de novo
+
+
+def test_reembolso_parcial_ou_de_cobranca_antiga_nao_encerra(stripe_configurado):
+    cancelar = AsyncMock()
+    for evento, fatura_atual in ((_evento_reembolso(reembolsada=False), "pi_atual"), (_evento_reembolso(pi="pi_velha"), "pi_atual")):
+        _cenario_reembolso()
+        with patch.object(stripe.Subscription, "retrieve_async", new=AsyncMock(return_value=_assinatura_com_fatura(fatura_atual))), \
+             patch.object(stripe.Subscription, "cancel_async", new=cancelar):
+            _executar(pagamentos.processar_evento(evento))
+    cancelar.assert_not_awaited()
+
+
+def test_reembolso_de_quem_ja_cancelou_ou_de_cliente_desconhecido_nao_faz_nada(stripe_configurado):
+    cancelar = AsyncMock()
+    buscar = AsyncMock()
+    for status, cliente in (("canceled", "cus_1"), ("active", "cus_DESCONHECIDO")):
+        _cenario_reembolso(status)
+        with patch.object(stripe.Subscription, "retrieve_async", new=buscar), patch.object(stripe.Subscription, "cancel_async", new=cancelar):
+            _executar(pagamentos.processar_evento(_evento_reembolso(cliente=cliente)))
+    buscar.assert_not_awaited()
+    cancelar.assert_not_awaited()
