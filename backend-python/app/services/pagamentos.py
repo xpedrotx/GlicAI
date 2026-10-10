@@ -30,7 +30,7 @@ _LOOKUP_KEY_PRECO = "glicai_pro_mensal"
 # Nome que aparece no extrato do cartão do paciente. A conta do Stripe é compartilhada
 # com outro produto (cujo nome é o padrão da conta), então o GlicAI define o dele no
 # produto — vale só pras assinaturas, até 22 letras, e o banco mostra em maiúsculas.
-DESCRITOR_EXTRATO = "GLICAI"
+DESCRITOR_EXTRATO = "GLICIA PRO"
 _preco_em_cache: str | None = None
 
 

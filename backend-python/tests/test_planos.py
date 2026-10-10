@@ -671,7 +671,7 @@ def test_preco_novo_leva_o_nome_do_glicai_no_extrato_do_cartao(stripe_configurad
         assert _executar(pagamentos._preco_id()) == "price_novo"
 
     produto = criar.await_args.kwargs["product_data"]
-    assert produto["statement_descriptor"] == "GLICAI"
+    assert produto["statement_descriptor"] == "GLICIA PRO"
     assert len(pagamentos.DESCRITOR_EXTRATO) <= 22 and "BOLSO" not in pagamentos.DESCRITOR_EXTRATO
     monkeypatch.setattr(pagamentos, "_preco_em_cache", None)
 
