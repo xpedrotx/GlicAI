@@ -560,7 +560,8 @@ def test_dados_pagamento_mostra_cartao_e_faturas_sem_rascunhos(stripe_configurad
     ]})
 
     with patch.object(stripe.Subscription, "retrieve_async", new=AsyncMock(return_value=assinatura)), \
-         patch.object(stripe.Invoice, "list_async", new=AsyncMock(return_value=faturas)):
+         patch.object(stripe.Invoice, "list_async", new=AsyncMock(return_value=faturas)), \
+         patch.object(stripe.Charge, "list_async", new=AsyncMock(return_value=_obj({"data": []}))):
         dados = _executar(pagamentos.dados_pagamento(usuario))
 
     assert dados["cartao"] == {"marca": "visa", "final": "4242", "mes": 3, "ano": 2033}
@@ -569,7 +570,7 @@ def test_dados_pagamento_mostra_cartao_e_faturas_sem_rascunhos(stripe_configurad
 
 
 def test_dados_pagamento_sem_cliente_no_stripe_vem_vazio(stripe_configurado):
-    assert _executar(pagamentos.dados_pagamento({"id": "u1"})) == {"cartao": None, "faturas": []}
+    assert _executar(pagamentos.dados_pagamento({"id": "u1"})) == {"cartao": None, "faturas": [], "proxima": None}
 
 
 def test_dados_pagamento_de_quem_cancelou_usa_o_cartao_do_cliente(stripe_configurado):
@@ -579,7 +580,8 @@ def test_dados_pagamento_de_quem_cancelou_usa_o_cartao_do_cliente(stripe_configu
 
     with patch.object(stripe.Subscription, "retrieve_async", new=buscar_assinatura), \
          patch.object(stripe.Customer, "retrieve_async", new=AsyncMock(return_value=cliente)), \
-         patch.object(stripe.Invoice, "list_async", new=AsyncMock(return_value=_obj({"data": []}))):
+         patch.object(stripe.Invoice, "list_async", new=AsyncMock(return_value=_obj({"data": []}))), \
+         patch.object(stripe.Charge, "list_async", new=AsyncMock(return_value=_obj({"data": []}))):
         dados = _executar(pagamentos.dados_pagamento(usuario))
 
     buscar_assinatura.assert_not_awaited()
@@ -672,3 +674,52 @@ def test_preco_novo_leva_o_nome_do_glicai_no_extrato_do_cartao(stripe_configurad
     assert produto["statement_descriptor"] == "GLICAI"
     assert len(pagamentos.DESCRITOR_EXTRATO) <= 22 and "BOLSO" not in pagamentos.DESCRITOR_EXTRATO
     monkeypatch.setattr(pagamentos, "_preco_em_cache", None)
+
+
+def _fatura_paga(id_, pi, valor=990):
+    return {"id": id_, "created": 1_800_000_000, "total": valor, "status": "paid", "invoice_pdf": "https://pdf", "hosted_invoice_url": None,
+            "payments": {"data": [{"status": "paid", "payment": {"type": "payment_intent", "payment_intent": pi}}]}}
+
+
+def test_fatura_reembolsada_aparece_como_reembolsada(stripe_configurado):
+    usuario = {"id": "u1", "stripe_customer_id": "cus_1", "assinatura_status": "canceled"}
+    faturas = _obj({"data": [
+        _fatura_paga("in_ok", "pi_ok"),
+        _fatura_paga("in_reemb", "pi_reemb"),
+        _fatura_paga("in_parcial", "pi_parcial"),
+        {"id": "in_void", "created": 1_700_000_000, "total": 990, "status": "void", "invoice_pdf": None, "hosted_invoice_url": None},
+    ]})
+    cobrancas = _obj({"data": [
+        {"payment_intent": "pi_ok", "refunded": False, "amount_refunded": 0},
+        {"payment_intent": "pi_reemb", "refunded": True, "amount_refunded": 990},
+        {"payment_intent": "pi_parcial", "refunded": False, "amount_refunded": 400},
+    ]})
+    cliente = _obj({"invoice_settings": {"default_payment_method": None}})
+
+    with patch.object(stripe.Customer, "retrieve_async", new=AsyncMock(return_value=cliente)), \
+         patch.object(stripe.Invoice, "list_async", new=AsyncMock(return_value=faturas)), \
+         patch.object(stripe.Charge, "list_async", new=AsyncMock(return_value=cobrancas)):
+        dados = _executar(pagamentos.dados_pagamento(usuario))
+
+    assert {f["id"]: f["status"] for f in dados["faturas"]} == {
+        "in_ok": "paga", "in_reemb": "reembolsada", "in_parcial": "reembolso_parcial", "in_void": "cancelada",
+    }
+
+
+def test_proxima_cobranca_agendada_cancelada_ou_inexistente(stripe_configurado):
+    base = {"id": "u1", "stripe_customer_id": "cus_1", "stripe_subscription_id": "sub_1", "assinatura_renova_em": "2026-11-09T12:00:00+00:00"}
+    vazio = _obj({"data": []})
+
+    def consultar(**extra):
+        usuario = {**base, "assinatura_status": "active", **extra}
+        assinatura = _obj({"id": "sub_1", "default_payment_method": None})
+        cliente = _obj({"invoice_settings": {"default_payment_method": None}})
+        with patch.object(stripe.Subscription, "retrieve_async", new=AsyncMock(return_value=assinatura)), \
+             patch.object(stripe.Customer, "retrieve_async", new=AsyncMock(return_value=cliente)), \
+             patch.object(stripe.Invoice, "list_async", new=AsyncMock(return_value=vazio)), \
+             patch.object(stripe.Charge, "list_async", new=AsyncMock(return_value=vazio)):
+            return _executar(pagamentos.dados_pagamento(usuario))["proxima"]
+
+    assert consultar() == {"data": "2026-11-09T12:00:00+00:00", "valor": 9.9, "status": "agendada"}
+    assert consultar(assinatura_cancela_no_fim=True)["status"] == "cancelada"
+    assert consultar(assinatura_status="canceled") is None

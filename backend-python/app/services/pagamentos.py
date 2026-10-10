@@ -235,6 +235,27 @@ async def alterar_cancelamento(usuario: dict, cancelar: bool) -> dict:
 _STATUS_FATURA = {"paid": "paga", "open": "em_aberto", "uncollectible": "nao_paga", "void": "cancelada"}
 
 
+def _id_do_pagamento(fatura: dict) -> str | None:
+    """PaymentIntent que pagou a fatura (na API atual do Stripe a fatura aponta pro pagamento, não pra cobrança)."""
+    for p in (fatura.get("payments") or {}).get("data", []):
+        pi = (p.get("payment") or {}).get("payment_intent")
+        if pi:
+            return pi if isinstance(pi, str) else pi.get("id")
+    return None
+
+
+def _status_da_fatura(fatura: dict, cobrancas_por_pagamento: dict) -> str:
+    status = _STATUS_FATURA.get(fatura.get("status"), "outra")
+    if status != "paga":
+        return status
+    cobranca = cobrancas_por_pagamento.get(_id_do_pagamento(fatura))
+    if cobranca and cobranca.get("refunded"):
+        return "reembolsada"
+    if cobranca and (cobranca.get("amount_refunded") or 0) > 0:
+        return "reembolso_parcial"
+    return "paga"
+
+
 def _cartao_de(pm) -> dict | None:
     pm = pm if isinstance(pm, dict) else None
     cartao = (pm or {}).get("card")
@@ -248,7 +269,7 @@ async def dados_pagamento(usuario: dict) -> dict:
     _exigir_configurado()
     cliente_id = usuario.get("stripe_customer_id")
     if not cliente_id:
-        return {"cartao": None, "faturas": []}
+        return {"cartao": None, "faturas": [], "proxima": None}
 
     try:
         pm = None
@@ -261,7 +282,10 @@ async def dados_pagamento(usuario: dict) -> dict:
                 await stripe.Customer.retrieve_async(cliente_id, expand=["invoice_settings.default_payment_method"])
             )
             pm = (cliente.get("invoice_settings") or {}).get("default_payment_method")
-        lista = _dict(await stripe.Invoice.list_async(customer=cliente_id, limit=12))
+        lista = _dict(await stripe.Invoice.list_async(customer=cliente_id, limit=12, expand=["data.payments"]))
+        # reembolso fica na cobrança: cruza com a fatura pelo pagamento
+        cobrancas = _dict(await stripe.Charge.list_async(customer=cliente_id, limit=50)).get("data", [])
+        cobrancas_por_pagamento = {c.get("payment_intent"): c for c in cobrancas if c.get("payment_intent")}
     except stripe.StripeError as erro:
         logger.exception("Falha ao buscar cartão/faturas do usuário %s", usuario["id"])
         raise PagamentosIndisponiveis() from erro
@@ -271,14 +295,23 @@ async def dados_pagamento(usuario: dict) -> dict:
             "id": f["id"],
             "data": datetime.fromtimestamp(f["created"], tz=timezone.utc).isoformat(),
             "valor": (f.get("total") or 0) / 100,
-            "status": _STATUS_FATURA.get(f.get("status"), "outra"),
+            "status": _status_da_fatura(f, cobrancas_por_pagamento),
             "pdf": f.get("invoice_pdf"),
             "url": f.get("hosted_invoice_url"),
         }
         for f in lista.get("data", [])
         if f.get("status") != "draft"
     ]
-    return {"cartao": _cartao_de(pm), "faturas": faturas}
+    # Próxima cobrança: aparece como "agendada" (ou "cancelada" se o paciente já cancelou)
+    proxima = None
+    renova_em = usuario.get("assinatura_renova_em")
+    if renova_em and usuario.get("assinatura_status") in ("active", "trialing", "past_due"):
+        proxima = {
+            "data": str(renova_em),
+            "valor": PRECO_CENTAVOS / 100,
+            "status": "cancelada" if usuario.get("assinatura_cancela_no_fim") else "agendada",
+        }
+    return {"cartao": _cartao_de(pm), "faturas": faturas, "proxima": proxima}
 
 
 async def preparar_troca_cartao(usuario: dict) -> dict:

@@ -226,12 +226,18 @@ const MARCAS: Record<string, string> = {
 };
 
 const STATUS_FATURA: Record<string, { rotulo: string; cor: string }> = {
-  paga: { rotulo: "Paga", cor: "text-verde bg-verde/10" },
+  paga: { rotulo: "Pago", cor: "text-verde bg-verde/10" },
+  reembolsada: { rotulo: "Reembolsado", cor: "text-muted bg-foreground/[0.07]" },
+  reembolso_parcial: { rotulo: "Reembolso parcial", cor: "text-muted bg-foreground/[0.07]" },
   em_aberto: { rotulo: "Em aberto", cor: "text-accent bg-accent/15" },
-  nao_paga: { rotulo: "Não paga", cor: "text-vermelho bg-vermelho/10" },
-  cancelada: { rotulo: "Cancelada", cor: "text-muted bg-surface" },
-  outra: { rotulo: "—", cor: "text-muted bg-surface" },
+  nao_paga: { rotulo: "Não pago", cor: "text-vermelho bg-vermelho/10" },
+  cancelada: { rotulo: "Cancelado", cor: "text-muted bg-foreground/[0.07]" },
+  agendada: { rotulo: "Agendado", cor: "text-accent bg-accent/15" },
+  outra: { rotulo: "—", cor: "text-muted bg-foreground/[0.07]" },
 };
+
+const dinheiro = (v: number) => v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+const dataCurta = (iso: string) => new Date(iso).toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit" });
 
 function PagamentoEFaturas({ plano, podeTrocarCartao }: { plano: Plano; podeTrocarCartao: boolean }) {
   const [dados, setDados] = useState<DadosPagamento | null>(null);
@@ -309,58 +315,67 @@ function PagamentoEFaturas({ plano, podeTrocarCartao }: { plano: Plano; podeTroc
         </Card>
       )}
 
-      <Card className="w-full max-w-2xl p-0">
-        <div className="px-6 pt-6">
-          <CardTitulo icone={<Receipt size={18} />} titulo="Faturas" descricao="Seu histórico de cobranças." />
-        </div>
-        {dados.faturas.length === 0 ? (
-          <p className="px-6 pb-6 text-sm text-muted">Nenhuma fatura ainda.</p>
+      <Card className="w-full max-w-2xl">
+        <CardTitulo icone={<Receipt size={18} />} titulo="Pagamentos" />
+        {dados.faturas.length === 0 && !dados.proxima ? (
+          <p className="text-sm text-muted">Nenhum pagamento ainda.</p>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-y border-border text-left text-xs font-medium text-muted">
-                  <th className="px-6 py-3 font-medium">Data</th>
-                  <th className="px-4 py-3 font-medium">Valor</th>
-                  <th className="px-4 py-3 font-medium">Situação</th>
-                  <th className="px-6 py-3 text-right font-medium">Comprovante</th>
-                </tr>
-              </thead>
-              <tbody>
-                {dados.faturas.map((f) => {
-                  const st = STATUS_FATURA[f.status] ?? STATUS_FATURA.outra;
-                  const link = f.pdf ?? f.url;
-                  return (
-                    <tr key={f.id} className="border-b border-border last:border-0">
-                      <td className="whitespace-nowrap px-6 py-3">{formatarData(f.data)}</td>
-                      <td className="whitespace-nowrap px-4 py-3 font-medium">
-                        {f.valor.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${st.cor}`}>{st.rotulo}</span>
-                      </td>
-                      <td className="px-6 py-3 text-right">
-                        {link ? (
-                          <a
-                            href={link}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1.5 font-medium text-primary hover:underline"
-                          >
-                            <FileText size={14} /> PDF
-                          </a>
-                        ) : (
-                          <span className="text-muted">—</span>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <ul className="divide-y divide-border">
+            {dados.proxima && (
+              <LinhaPagamento
+                data={dataCurta(dados.proxima.data)}
+                status={dados.proxima.status}
+                valor={dados.proxima.valor}
+              />
+            )}
+            {dados.faturas.map((f) => (
+              <LinhaPagamento
+                key={f.id}
+                data={formatarData(f.data)}
+                status={f.status}
+                valor={f.valor}
+                comprovante={f.pdf ?? f.url}
+              />
+            ))}
+          </ul>
         )}
       </Card>
     </>
+  );
+}
+
+function LinhaPagamento({
+  data,
+  status,
+  valor,
+  comprovante,
+}: {
+  data: string;
+  status: string;
+  valor: number;
+  comprovante?: string | null;
+}) {
+  const st = STATUS_FATURA[status] ?? STATUS_FATURA.outra;
+  return (
+    <li className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-3.5 text-sm first:pt-0 last:pb-0">
+      <span className="flex flex-wrap items-baseline gap-x-2.5">
+        <span className="font-medium">{data}</span>
+        <span className="text-muted">Cartão de crédito</span>
+        {comprovante && (
+          <a
+            href={comprovante}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+          >
+            <FileText size={12} /> comprovante
+          </a>
+        )}
+      </span>
+      <span className="flex items-center gap-3">
+        <span className={`rounded-full px-3 py-1 text-xs font-semibold ${st.cor}`}>{st.rotulo}</span>
+        <span className="font-semibold tabular-nums">{dinheiro(valor)}</span>
+      </span>
+    </li>
   );
 }

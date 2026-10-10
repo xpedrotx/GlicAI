@@ -82,14 +82,17 @@ export type Fatura = {
   id: string;
   data: string;
   valor: number;
-  status: "paga" | "em_aberto" | "nao_paga" | "cancelada" | "outra";
+  status: "paga" | "reembolsada" | "reembolso_parcial" | "em_aberto" | "nao_paga" | "cancelada" | "outra";
   pdf: string | null;
   url: string | null;
 };
 
+export type ProximaCobranca = { data: string; valor: number; status: "agendada" | "cancelada" };
+
 export type DadosPagamento = {
   cartao: { marca: string | null; final: string | null; mes: number | null; ano: number | null } | null;
   faturas: Fatura[];
+  proxima: ProximaCobranca | null;
 };
 
 export type Plano = {
